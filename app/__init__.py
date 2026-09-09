@@ -1,0 +1,1 @@
+"""FinCredit Copilot application package."""

@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.pyc
+
+# Local QA, document-rendering and installer artifacts
+.edge-headless-profile/
+qa_*/
+lo_download_*/
+lo_tmp_*/
+LibreOffice_*/
+temp_backup_*/
+render_docx_wps.py
+soffice_stub.ps1
+soffice.cmd
+resume_render_wps.pdf
+daigo_*
+game-demo/
+scripts/*resume*.py
+
+# Personal document and image artifacts are not part of the application
+*.docx
+*.pdf
+*.png

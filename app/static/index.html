@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智信协同智能体 | 授信协同驾驶舱</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="ambient-grid" aria-hidden="true"></div>
+  <div class="orb orb-a" aria-hidden="true"></div>
+  <div class="orb orb-b" aria-hidden="true"></div>
+  <header class="topbar">
+    <div class="brand-block">
+      <p class="eyebrow">智信协同 · 企业级金融智能体操作系统</p>
+      <h1>授信尽调与审批协同智能中枢</h1>
+      <p class="hero-subtitle">融合政策检索、材料核验、风控规则、智能体推理与人工审批闭环的金融业务驾驶舱。</p>
+      <div class="hero-signals">
+        <span>政策知识增强</span>
+        <span>流程防呆策略</span>
+        <span>智能体运行观测</span>
+      </div>
+    </div>
+    <label class="user-switch">演示身份
+      <select id="user-id">
+        <option value="sales_001">王客户经理</option>
+        <option value="rm_001" selected>李风险经理</option>
+        <option value="approver_001">陈审批人</option>
+        <option value="compliance_001">周合规管理员</option>
+      </select>
+    </label>
+  </header>
+
+  <main>
+    <section class="notice"><strong>人工决策原则：</strong>系统仅生成预审建议与证据；授信批准、拒绝和退回均须由审批人明确操作。<span>人工在环授信治理</span></section>
+    <section class="layout">
+      <aside class="panel applications">
+        <div class="section-title"><h2>授信申请</h2><button id="refresh" class="ghost">刷新</button></div>
+        <button class="application-card active" data-id="APP001"><span>APP001</span><strong>华辰设备制造有限公司</strong><small>3,000,000 元 · 流动资金</small></button>
+        <button class="application-card" data-id="APP002"><span>APP002</span><strong>远山贸易有限公司</strong><small>1,500,000 元 · 流动资金</small></button>
+      </aside>
+
+      <section class="workspace">
+        <div class="panel summary" id="summary"><p class="loading">正在读取申请信息…</p></div>
+        <div class="actions panel">
+          <button id="pre-review" class="primary">生成预审报告</button>
+          <button id="load-report" class="secondary">查看预审报告</button>
+          <input id="override-reason" placeholder="高风险提交时填写人工覆盖理由">
+          <button id="submit" class="secondary">提交人工审批</button>
+        </div>
+        <section class="panel materials"><div class="section-title"><h2>申请材料</h2><span id="material-state" class="tag">待检查</span></div><div class="upload-row"><select id="document-type"><option value="business_license">营业执照</option><option value="financial_statement">财务报表</option><option value="bank_statement">银行流水</option></select><input id="material-file" type="file" accept=".txt,.csv,text/plain,text/csv"><button id="upload-material" class="secondary">归档并提取</button></div><p class="empty">演示版支持文本或表格材料，单文件不超过 2 兆字节。</p><div id="material-content" class="empty">正在检查材料完整性…</div></section>
+        <section class="panel report"><div class="section-title"><h2>预审报告与证据链</h2><span id="report-state" class="tag">尚未加载</span></div><div id="report-content" class="empty">选择“生成预审报告”后，系统将在这里展示规则结果与政策依据。</div></section>
+        <section class="panel agent-chat"><div class="section-title"><h2>智能体业务问答</h2><span id="agent-state" class="tag">待提问</span></div><div class="chat-row"><input id="agent-question" placeholder="例如：为什么这个申请不能提交？下一步应该怎么处理？"><button id="ask-agent" class="primary">询问智能体</button></div><div id="agent-answer" class="empty">智能体将基于当前申请、材料状态、规则命中和政策证据回答。</div></section>
+        <section class="panel observability"><div class="section-title"><h2>智能体运行观测</h2><button id="load-metrics" class="ghost">刷新指标</button></div><div id="metrics-content" class="empty">切换到“周合规管理员”后可查看智能体运行次数、降级率、延迟和工具调用。</div></section>
+        <section class="panel approval"><div class="section-title"><h2>人工审批</h2><span id="approval-state" class="tag">未提交</span></div><div id="approval-content" class="empty">提交审批后，审批人可在此处理任务。</div></section>
+      </section>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

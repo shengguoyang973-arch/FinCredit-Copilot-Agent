@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Settings:
+    app_name: str = "FinCredit Copilot"
+    app_version: str = "0.1.0"
+    service_name: str = "fincredit-copilot"
+    identity_provider: str = "demo-header"
+    agent_provider: str = "deterministic-local"
+    openai_model: str = "gpt-4.1-mini"
+    deepseek_model: str = "deepseek-v4-pro"
+    deepseek_base_url: str = "https://api.deepseek.com"
+    openai_timeout_seconds: float = 20.0
+    agent_max_retries: int = 2
+    agent_circuit_failure_threshold: int = 3
+    agent_circuit_cooldown_seconds: float = 30.0
+    max_document_bytes: int = 2_000_000
+    data_dir: Path = Path(__file__).resolve().parent.parent / "data"
+
+    @property
+    def database_path(self) -> Path:
+        return self.data_dir / "fincredit.db"
+
+
+def get_settings() -> Settings:
+    data_dir = Path(os.getenv("FINCREDIT_DATA_DIR", str(Settings.data_dir)))
+    max_document_bytes = int(os.getenv("FINCREDIT_MAX_DOCUMENT_BYTES", str(Settings.max_document_bytes)))
+    return Settings(
+        identity_provider=os.getenv("FINCREDIT_IDENTITY_PROVIDER", Settings.identity_provider).strip().lower(),
+        agent_provider=os.getenv("FINCREDIT_AGENT_PROVIDER", Settings.agent_provider).strip().lower(),
+        openai_model=os.getenv("OPENAI_MODEL", Settings.openai_model).strip(),
+        deepseek_model=os.getenv("DEEPSEEK_MODEL", Settings.deepseek_model).strip(),
+        deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", Settings.deepseek_base_url).strip(),
+        openai_timeout_seconds=float(os.getenv("OPENAI_TIMEOUT_SECONDS", str(Settings.openai_timeout_seconds))),
+        agent_max_retries=int(os.getenv("FINCREDIT_AGENT_MAX_RETRIES", str(Settings.agent_max_retries))),
+        agent_circuit_failure_threshold=int(os.getenv("FINCREDIT_AGENT_CIRCUIT_FAILURE_THRESHOLD", str(Settings.agent_circuit_failure_threshold))),
+        agent_circuit_cooldown_seconds=float(os.getenv("FINCREDIT_AGENT_CIRCUIT_COOLDOWN_SECONDS", str(Settings.agent_circuit_cooldown_seconds))),
+        max_document_bytes=max_document_bytes,
+        data_dir=data_dir,
+    )
+
+
+def validate_settings(settings: Settings | None = None) -> list[str]:
+    """Return non-secret configuration errors for startup/readiness checks."""
+    settings = settings or get_settings()
+    errors: list[str] = []
+    if settings.openai_timeout_seconds <= 0:
+        errors.append("OPENAI_TIMEOUT_SECONDS 必须大于 0")
+    if settings.agent_max_retries < 0:
+        errors.append("FINCREDIT_AGENT_MAX_RETRIES 不能小于 0")
+    if settings.max_document_bytes <= 0:
+        errors.append("FINCREDIT_MAX_DOCUMENT_BYTES 必须大于 0")
+    if settings.agent_provider in {"deepseek", "deepseek-chat"} and not os.getenv("DEEPSEEK_API_KEY"):
+        errors.append("DEEPSEEK_API_KEY 未配置")
+    if settings.agent_provider in {"openai", "openai-responses"} and not os.getenv("OPENAI_API_KEY"):
+        errors.append("OPENAI_API_KEY 未配置")
+    return errors
