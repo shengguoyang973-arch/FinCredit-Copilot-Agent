@@ -4,7 +4,6 @@ import pytest
 
 from app.agent_runtime.reliability import (
     ProviderCircuitOpenError,
-    ProviderCircuitBreaker,
     ReliabilityConfig,
     ReliableInvoker,
 )

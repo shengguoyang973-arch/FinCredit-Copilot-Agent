@@ -32,3 +32,34 @@ def test_validate_answer_rejects_final_credit_decision() -> None:
     }
     with pytest.raises(AgentOutputValidationError):
         validate_answer(output)
+
+
+def test_validate_answer_rejects_semantic_decision_and_invalid_items() -> None:
+    output = {
+        "provider": "external",
+        "answer": "综合判断，建议立即同意本笔贷款。",
+        "supporting_evidence_ids": ["POL-9.9"],
+        "follow_up_actions": ["直接流转。"],
+        "governance_note": "人工负责。",
+        "fallback": False,
+    }
+    with pytest.raises(AgentOutputValidationError, match="人工审批边界"):
+        validate_answer(output, {"POL-9.9"})
+
+    output["answer"] = "请人工复核。"
+    output["follow_up_actions"] = [123]
+    with pytest.raises(AgentOutputValidationError, match="结构约束"):
+        validate_answer(output, {"POL-9.9"})
+
+
+def test_validate_answer_rejects_unretrieved_evidence() -> None:
+    output = {
+        "provider": "external",
+        "answer": "请人工复核。",
+        "supporting_evidence_ids": ["POL-9.9"],
+        "follow_up_actions": ["核验材料。"],
+        "governance_note": "不替代人工审批。",
+        "fallback": False,
+    }
+    with pytest.raises(AgentOutputValidationError, match="未检索到"):
+        validate_answer(output, {"POL-1.2"})

@@ -12,10 +12,9 @@ from app.prompt_registry import get_prompt
 from app.approval_policy import SubmissionPolicyError, evaluate_submission_policy
 from app.document_store import material_check
 from app.domain import ApplicationStatus, LoanApplication, PolicyClause, Role, User
-from app.knowledge_store import get_policies, list_policies
-from app.knowledge_retrieval import retrieve_policy_hits
-from app.hybrid_retrieval import retrieve_hybrid_policy_hits
+from app.knowledge_store import list_policies
 from app.observability import current_request_id, log_event
+from app.rag import retrieve_policy_context
 from app.repository import audit, get_customer, update_status
 from app.risk_rules import POLICY_EVIDENCE_IDS, PreReviewRuleDecision, evaluate_pre_review_rules
 from app.workflow_store import (
@@ -31,7 +30,7 @@ from app.workflow_store import (
 
 
 def search_policies(query: str) -> list[PolicyClause]:
-    return [hit.policy for hit in retrieve_hybrid_policy_hits(query, list_policies())]
+    return [hit.policy for hit in retrieve_policy_context(query, list_policies()).hits]
 
 
 def pre_review(application: LoanApplication, actor: User, existing_run_id: str | None = None) -> dict:
@@ -51,39 +50,45 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
         if agent_context.tool_results:
             transition_agent_run(run_id, AgentRunState.TOOL_RUNNING, tool_count=len(agent_context.tool_results))
         transition_agent_run(run_id, AgentRunState.MODEL_RUNNING, provider=agent_provider.name)
-        update_status(application, ApplicationStatus.PRE_REVIEWED)
         started = time.perf_counter()
-        invoker = ReliableInvoker.for_provider(agent_provider.name)
-        agent_brief, attempts = invoker.invoke(lambda: agent_provider.generate_brief(agent_context))
+        agent_brief, attempts = _invoke_agent_provider(
+            agent_provider,
+            "generate_brief",
+            agent_context,
+            "",
+        )
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         snapshot = _agent_input_snapshot(agent_context, "generate_brief", duration_ms=duration_ms) | {"attempts": attempts}
         transition_agent_run(run_id, AgentRunState.VALIDATING)
         if agent_brief.get("fallback"):
             transition_agent_run(run_id, AgentRunState.FALLBACK, reason=agent_brief.get("fallback_reason"))
             transition_agent_run(run_id, AgentRunState.VALIDATING, event_type="fallback_output_validated")
+        agent_brief = agent_brief | {"run_id": run_id, "created_at": run["created_at"]}
+        report = {
+            "application_id": application.id,
+            "conclusion": rule_decision.conclusion,
+            "disclaimer": "本报告为系统预审草稿，不构成授信决定；须由具备权限的人员复核并审批。",
+            "customer_snapshot": customer,
+            "requested_amount": application.requested_amount,
+            "suggested_max_amount": rule_decision.suggested_max_amount,
+            "findings": findings,
+            "evidence": evidence,
+            "materials": materials,
+            "rag": agent_context.retrieval_trace,
+            "agent_brief": agent_brief,
+        }
+        # Do not expose PRE_REVIEWED until the governed report is durable.
+        save_report(application.id, report, actor.id)
         transition_agent_run(run_id, AgentRunState.COMPLETED)
         agent_run = complete_agent_run(run_id, snapshot, agent_brief)
+        update_status(application, ApplicationStatus.PRE_REVIEWED)
     except Exception as error:
         try:
             transition_agent_run(run_id, AgentRunState.FAILED, error_code=type(error).__name__)
         except (KeyError, ValueError):
             pass
         raise
-    agent_brief = agent_brief | {"run_id": agent_run["id"], "created_at": agent_run["created_at"]}
     _log_agent_run(application.id, agent_provider.name, agent_run["id"], "generate_brief", duration_ms, agent_brief)
-    report = {
-        "application_id": application.id,
-        "conclusion": rule_decision.conclusion,
-        "disclaimer": "本报告为系统预审草稿，不构成授信决定；须由具备权限的人员复核并审批。",
-        "customer_snapshot": customer,
-        "requested_amount": application.requested_amount,
-        "suggested_max_amount": rule_decision.suggested_max_amount,
-        "findings": findings,
-        "evidence": evidence,
-        "materials": materials,
-        "agent_brief": agent_brief,
-    }
-    save_report(application.id, report, actor.id)
     audit("agent_brief_generated", actor.id, application.id, provider=agent_provider.name, run_id=agent_run["id"])
     audit("pre_review_completed", actor.id, application.id, conclusion=report["conclusion"], finding_count=len(findings))
     return report
@@ -107,8 +112,12 @@ def answer_business_question(application: LoanApplication, actor: User, question
             transition_agent_run(run_id, AgentRunState.TOOL_RUNNING, tool_count=len(agent_context.tool_results))
         transition_agent_run(run_id, AgentRunState.MODEL_RUNNING, provider=agent_provider.name)
         started = time.perf_counter()
-        invoker = ReliableInvoker.for_provider(agent_provider.name)
-        answer, attempts = invoker.invoke(lambda: agent_provider.answer_question(agent_context, model_question))
+        answer, attempts = _invoke_agent_provider(
+            agent_provider,
+            "answer_question",
+            agent_context,
+            model_question,
+        )
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         snapshot = _agent_input_snapshot(agent_context, "answer_question", model_question, duration_ms) | {"attempts": attempts}
         transition_agent_run(run_id, AgentRunState.VALIDATING)
@@ -170,7 +179,23 @@ def _build_agent_context(application: LoanApplication, question: str | None = No
     materials = material_check(application.id)
     rule_decision = evaluate_pre_review_rules(application, customer, materials)
     findings = rule_decision.findings_as_dicts()
-    evidence = [asdict(p) for p in get_policies(POLICY_EVIDENCE_IDS)]
+    policy_query = question or " ".join([
+        application.purpose,
+        rule_decision.conclusion,
+        *(item["message"] for item in findings),
+    ])
+    retrieval = retrieve_policy_context(
+        policy_query,
+        list_policies(),
+        required_policy_ids=POLICY_EVIDENCE_IDS,
+    )
+    evidence = [
+        asdict(hit.policy) | {
+            "citation": hit.document.metadata.get("citation"),
+            "retrieval_score": hit.relevance_score,
+        }
+        for hit in sorted(retrieval.hits, key=lambda item: item.policy.id)
+    ]
     tool_results = execute_agent_tools(application, question)
     agent_context = AgentContext(
         application_id=application.id,
@@ -183,6 +208,7 @@ def _build_agent_context(application: LoanApplication, question: str | None = No
         materials_complete=materials["complete"],
         missing_materials=materials["missing"],
         tool_results=tool_results,
+        retrieval_trace=retrieval.trace(),
     )
     return customer, materials, rule_decision, findings, evidence, agent_context
 
@@ -201,11 +227,31 @@ def _agent_input_snapshot(agent_context: AgentContext, task: str, question: str 
         "missing_material_types": [item["type"] for item in agent_context.missing_materials],
         "tool_names": [item["tool_name"] for item in agent_context.tool_results],
         "tool_count": len(agent_context.tool_results),
+        "rag": agent_context.retrieval_trace,
         "duration_ms": duration_ms,
         "request_id": current_request_id(),
         "prompt_id": get_prompt(task).prompt_id,
         "prompt_version": get_prompt(task).version,
     }
+
+
+def _invoke_agent_provider(
+    provider,
+    task: str,
+    context: AgentContext,
+    question: str,
+) -> tuple[dict, int]:
+    """Retry model errors before asking the Provider for governed fallback."""
+    invoker = ReliableInvoker.for_provider(provider.name)
+    operation = (
+        (lambda: provider.answer_question(context, question))
+        if task == "answer_question"
+        else (lambda: provider.generate_brief(context))
+    )
+    try:
+        return invoker.invoke(operation)
+    except Exception as error:
+        return provider.degraded_output(task, context, question, error), invoker.config.max_retries + 1
 
 
 def _log_agent_run(application_id: str, provider: str, run_id: str, task: str, duration_ms: float, output: dict) -> None:

@@ -28,6 +28,9 @@ class InMemoryVectorStore:
     def count(self) -> int:
         return len(self._documents)
 
+    def clear(self) -> None:
+        self._documents.clear()
+
 
 def _cosine(left: list[float], right: tuple[float, ...]) -> float:
     if not left or not right or len(left) != len(right):

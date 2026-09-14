@@ -1,5 +1,3 @@
-import pytest
-
 from app.domain import Role
 from app.identity import DemoHeaderIdentityProvider
 from app.repository import USERS

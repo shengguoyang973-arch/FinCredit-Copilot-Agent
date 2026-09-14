@@ -31,7 +31,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.1.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.2.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -212,6 +212,8 @@ def test_policy_search_returns_versioned_evidence() -> None:
     response = client.post("/v1/knowledge/search", headers={"X-User-Id": "rm_001"}, json={"query": "额度 流动资金"})
     assert response.status_code == 200
     assert response.json()["results"][0]["id"] == "POL-2.1"
+    assert response.json()["retriever"] == "langchain-hybrid-policy-v1"
+    assert response.json()["rag_config"]["top_k"] >= 1
 
 
 def test_compliance_admin_can_import_policy() -> None:

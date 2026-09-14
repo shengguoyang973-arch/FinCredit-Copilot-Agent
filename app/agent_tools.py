@@ -41,14 +41,47 @@ def _execute_tool(tool_name: str, application) -> dict:
     if tool_name == "get_application_snapshot":
         customer = get_customer(application.customer_id)
         return {
-            "application": application.__dict__,
-            "customer": customer,
+            "application": {
+                "id": application.id,
+                "requested_amount": application.requested_amount,
+                "term_months": application.term_months,
+                "purpose": application.purpose,
+                "status": application.status,
+            },
+            "customer": _safe_customer_snapshot(customer),
         }
     if tool_name == "get_material_status":
-        return material_check(application.id)
+        status = material_check(application.id)
+        return {
+            "complete": status["complete"],
+            "missing": status["missing"],
+            "documents": [
+                {
+                    "document_type": item["document_type"],
+                    "byte_size": item["byte_size"],
+                    "sha256": item["sha256"],
+                    "extracted_fields": sorted(key for key in item["extracted"] if key != "text_preview"),
+                }
+                for item in status["documents"]
+            ],
+        }
     if tool_name == "get_policy_evidence":
         return {"policy_ids": [policy.id for policy in get_policies(POLICY_EVIDENCE_IDS)]}
     if tool_name == "get_approval_status":
         task = get_approval_task(f"APR-{application.id}")
         return {"task": task}
     raise ValueError(f"Agent 工具未实现：{tool_name}")
+
+
+def _safe_customer_snapshot(customer: dict | None) -> dict | None:
+    if customer is None:
+        return None
+    allowed_fields = {
+        "industry",
+        "operating_years",
+        "annual_revenue",
+        "debt_ratio",
+        "overdue_days_12m",
+        "credit_grade",
+    }
+    return {key: value for key, value in customer.items() if key in allowed_fields}

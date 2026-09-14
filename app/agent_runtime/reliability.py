@@ -85,15 +85,22 @@ class ReliableInvoker:
             raise ProviderCircuitOpenError("Provider 熔断器已打开")
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(operation)
             try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    result = executor.submit(operation).result(timeout=self.config.timeout_seconds)
+                result = future.result(timeout=self.config.timeout_seconds)
+                executor.shutdown(wait=True, cancel_futures=False)
                 self.breaker.success()
                 return result, attempt
             except FutureTimeoutError:
+                future.cancel()
+                # Do not wait for a timed-out provider call. The provider-level
+                # network timeout remains responsible for releasing its worker.
+                executor.shutdown(wait=False, cancel_futures=True)
                 last_error = TimeoutError("Provider 调用超时")
                 self.breaker.failure()
             except Exception as error:
+                executor.shutdown(wait=True, cancel_futures=False)
                 last_error = error
                 self.breaker.failure()
             if attempt < self.config.max_retries:

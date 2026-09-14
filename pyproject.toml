@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 75
+
+[tool.ruff]
+target-version = "py312"
+line-length = 140
+extend-exclude = ["scripts/*resume*.py"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

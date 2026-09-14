@@ -1,0 +1,36 @@
+{
+  "version": "2026.09-v1",
+  "description": "FinCredit 政策检索离线评测集；仅使用模拟问题和政策编号。",
+  "cases": [
+    {
+      "id": "rag-admission-years",
+      "query": "企业成立不到两年是否符合小微企业贷款准入条件？",
+      "expected_policy_ids": ["POL-1.2"]
+    },
+    {
+      "id": "rag-prohibited-industry",
+      "query": "房地产开发和高污染行业是否属于禁止准入行业？",
+      "expected_policy_ids": ["POL-1.2"]
+    },
+    {
+      "id": "rag-credit-limit",
+      "query": "流动资金贷款最多可以占企业年度营业收入的多少？",
+      "expected_policy_ids": ["POL-2.1"]
+    },
+    {
+      "id": "rag-overdue-leverage",
+      "query": "近十二个月存在逾期并且资产负债率超过百分之七十五应如何审查？",
+      "expected_policy_ids": ["POL-3.4"]
+    },
+    {
+      "id": "rag-admission-and-limit",
+      "query": "企业经营不足两年而且申请额度超过营业收入比例时适用哪些政策？",
+      "expected_policy_ids": ["POL-1.2", "POL-2.1"]
+    },
+    {
+      "id": "rag-limit-and-credit-risk",
+      "query": "贷款额度超过收入上限并且企业最近存在逾期记录，需要引用哪些制度？",
+      "expected_policy_ids": ["POL-2.1", "POL-3.4"]
+    }
+  ]
+}

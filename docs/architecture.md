@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. The current implementation keeps all data local for safe demonstration, while preserving clear seams for managed database, enterprise identity, model providers, and workflow systems.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.2 uses LangChain for model composition, structured output, and retrieval contracts while retaining deterministic credit rules and a mandatory human approval boundary.
 
 ## Module Layout
 
@@ -16,7 +16,8 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/services.py`: Business workflow orchestration for policy search, pre-review, Agent brief generation, real-time Agent Q&A, and approval submission.
 - `app/risk_rules.py`: Pre-review rule engine for admission, amount, overdue, leverage, and material completeness findings.
 - `app/approval_policy.py`: Submission guardrail engine for missing materials, blocking rules, high-risk findings, and override reasons.
-- `app/agent_provider.py`: Pluggable Agent Provider contract with local deterministic, OpenAI Responses, and DeepSeek chat implementations.
+- `app/agent_provider.py`: LangChain LCEL prompt/model/structured-output pipeline with local deterministic fallback, OpenAI Responses, and DeepSeek-compatible implementations.
+- `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
 - `app/prompt_registry.py`: Versioned governed prompts; every Agent Run records prompt identity and version.
 - `app/evaluation.py`: Offline evaluation contract for accuracy, evidence recall, boundary violations, latency, and cost.
 - `app/agent_runtime/`: Agent Run state machine, recovery queue, reliability policy, guardrails, provider routing, and release evaluation primitives.
@@ -34,21 +35,25 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 1. A user selects an application and role in the workbench.
 2. API routes authenticate the demo user with `X-User-Id` and enforce role permissions.
 3. Service orchestration loads application, customer, policy, and material status from stores.
-4. The pre-review rule engine produces deterministic findings and policy evidence.
-5. The tool allowlist supplies read-only business context to the Agent.
-6. The Agent Provider produces a governed brief or business answer from a structured input snapshot.
-7. Agent output validation enforces schema shape and the no-auto-decision boundary.
-8. Workflow storage persists the report and the Agent run trace.
-9. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
-10. The approval policy engine evaluates whether the application can be submitted.
-11. Human approvers make the final decision through the approval task endpoint.
+4. The pre-review rule engine produces deterministic findings and required policy IDs.
+5. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval and emits citation-bearing `Document` objects.
+6. The tool allowlist supplies minimized, read-only business context without document body previews.
+7. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
+8. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
+9. Workflow storage persists the report, Agent run, and RAG trace.
+10. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
+11. The approval policy engine evaluates whether the application can be submitted.
+12. Human approvers make the final decision through the approval task endpoint.
 
 ## Current Guardrails
 
 - The Agent does not approve, reject, or return credit applications.
 - Real-model Providers fall back to the local deterministic Provider when credentials are missing or calls fail.
 - Agent tools are read-only and selected from an explicit allowlist.
+- External-model tool context excludes uploaded document text previews and registration identifiers.
 - Agent outputs are locally validated before being saved or shown.
+- Agent evidence IDs must be present in the retrieved RAG context.
+- Release gating includes RAG Hit Rate, Recall, and MRR thresholds.
 - Every HTTP response carries `X-Request-Id`, and audit events include the active request ID when available.
 - Agent runs record latency, fallback status, and tool-call summaries for operational review.
 - The workbench observability panel reads the compliance-only metrics endpoint so demo operators can see recent Agent runs, fallback rate, latency, provider distribution, and tool usage without leaving the business flow.

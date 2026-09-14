@@ -4,26 +4,44 @@ from fastapi import APIRouter, Depends, status
 
 from app.domain import PolicyClause, Role, User
 from app.knowledge_store import list_policies, save_policy
-from app.hybrid_retrieval import retrieve_hybrid_policy_hits
+from app.rag import RAGConfig, retrieve_policy_context
 from app.repository import audit
 from app.schemas import PolicyImportRequest, PolicySearchRequest
 from app.security import current_user, require_roles
-from app.services import search_policies
 
 router = APIRouter(prefix="/v1/knowledge", tags=["knowledge"])
 
 
 @router.post("/search")
 def knowledge_search(body: PolicySearchRequest, user: User = Depends(current_user)) -> dict:
-    hits = retrieve_hybrid_policy_hits(body.query, list_policies())
-    audit("policy_searched", user.id, "policy_library", query=body.query, result_count=len(hits))
-    return {"query": body.query, "results": [hit.policy.__dict__ | {
-        "relevance_score": hit.rerank_score,
-        "lexical_score": hit.lexical_score,
-        "vector_score": hit.vector_score,
-        "matched_terms": list(hit.matched_terms),
-        "citation": hit.citation,
-    } for hit in hits]}
+    retrieval = retrieve_policy_context(body.query, list_policies())
+    audit(
+        "policy_searched",
+        user.id,
+        "policy_library",
+        query=body.query,
+        result_count=len(retrieval.hits),
+        retriever=retrieval.retriever,
+    )
+    return {
+        "query": body.query,
+        "retriever": retrieval.retriever,
+        "rag_config": retrieval.config.to_dict(),
+        "results": [hit.policy.__dict__ | {
+            "relevance_score": hit.relevance_score,
+            "lexical_score": hit.document.metadata.get("lexical_score", 0.0),
+            "vector_score": hit.document.metadata.get("vector_score", 0.0),
+            "matched_terms": hit.document.metadata.get("matched_terms", []),
+            "citation": hit.document.metadata.get("citation"),
+        } for hit in retrieval.hits],
+    }
+
+
+@router.get("/rag-config")
+def rag_config(user: User = Depends(current_user)) -> dict:
+    config = RAGConfig.from_settings()
+    audit("rag_config_viewed", user.id, "policy_library", retriever="langchain-hybrid-policy-v1")
+    return {"retriever": "langchain-hybrid-policy-v1", "config": config.to_dict()}
 
 
 @router.get("/policies")

@@ -1,89 +1,100 @@
 from __future__ import annotations
 
-BRIEF_REQUIRED_FIELDS = {
-    "provider": str,
-    "summary": str,
-    "key_risks": list,
-    "next_actions": list,
-    "governance_note": str,
-    "evidence_ids": list,
-    "materials_complete": bool,
-}
+import re
+from typing import Annotated
 
-ANSWER_REQUIRED_FIELDS = {
-    "provider": str,
-    "answer": str,
-    "supporting_evidence_ids": list,
-    "follow_up_actions": list,
-    "governance_note": str,
-    "fallback": bool,
-}
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-OPENAI_BRIEF_JSON_SCHEMA = {
-    "name": "fincredit_agent_brief",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["summary", "key_risks", "next_actions", "governance_note", "evidence_ids", "materials_complete"],
-        "properties": {
-            "summary": {"type": "string"},
-            "key_risks": {"type": "array", "items": {"type": "string"}},
-            "next_actions": {"type": "array", "items": {"type": "string"}},
-            "governance_note": {"type": "string"},
-            "evidence_ids": {"type": "array", "items": {"type": "string"}},
-            "materials_complete": {"type": "boolean"},
-        },
-    },
-    "strict": True,
-}
+NonEmptyText = Annotated[str, Field(min_length=1, max_length=4000)]
+PolicyId = Annotated[str, Field(pattern=r"^POL-[A-Za-z0-9.]+$")]
 
-OPENAI_ANSWER_JSON_SCHEMA = {
-    "name": "fincredit_agent_answer",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["answer", "supporting_evidence_ids", "follow_up_actions", "governance_note"],
-        "properties": {
-            "answer": {"type": "string"},
-            "supporting_evidence_ids": {"type": "array", "items": {"type": "string"}},
-            "follow_up_actions": {"type": "array", "items": {"type": "string"}},
-            "governance_note": {"type": "string"},
-        },
-    },
-    "strict": True,
-}
+
+class LangChainBriefResponse(BaseModel):
+    """Schema requested from the LangChain model runnable."""
+
+    summary: NonEmptyText
+    key_risks: list[NonEmptyText] = Field(min_length=1, max_length=20)
+    next_actions: list[NonEmptyText] = Field(min_length=1, max_length=20)
+    governance_note: NonEmptyText
+    evidence_ids: list[PolicyId] = Field(min_length=1, max_length=50)
+    materials_complete: bool
+
+
+class LangChainAnswerResponse(BaseModel):
+    """Schema requested from the LangChain model runnable."""
+
+    answer: NonEmptyText
+    supporting_evidence_ids: list[PolicyId] = Field(min_length=1, max_length=50)
+    follow_up_actions: list[NonEmptyText] = Field(min_length=1, max_length=20)
+    governance_note: NonEmptyText
+
+
+class GovernedBrief(LangChainBriefResponse):
+    model_config = ConfigDict(extra="allow")
+
+    provider: NonEmptyText
+
+
+class GovernedAnswer(LangChainAnswerResponse):
+    model_config = ConfigDict(extra="allow")
+
+    provider: NonEmptyText
+    fallback: bool
 
 
 class AgentOutputValidationError(ValueError):
     pass
 
 
-def validate_brief(output: dict) -> dict:
-    _validate_required(output, BRIEF_REQUIRED_FIELDS)
-    _validate_governance_boundary(output)
-    return output
+def validate_brief(output: dict, allowed_evidence_ids: set[str] | None = None) -> dict:
+    try:
+        parsed = GovernedBrief.model_validate(output)
+    except ValidationError as error:
+        raise AgentOutputValidationError(f"Agent 报告输出不满足结构约束：{error.errors()[0]['msg']}") from error
+    _validate_evidence(parsed.evidence_ids, allowed_evidence_ids)
+    _validate_governance_boundary([parsed.summary, *parsed.key_risks, *parsed.next_actions])
+    return parsed.model_dump(exclude_none=True)
 
 
-def validate_answer(output: dict) -> dict:
-    _validate_required(output, ANSWER_REQUIRED_FIELDS)
-    _validate_governance_boundary(output)
-    return output
+def validate_answer(output: dict, allowed_evidence_ids: set[str] | None = None) -> dict:
+    try:
+        parsed = GovernedAnswer.model_validate(output)
+    except ValidationError as error:
+        raise AgentOutputValidationError(f"Agent 问答输出不满足结构约束：{error.errors()[0]['msg']}") from error
+    _validate_evidence(parsed.supporting_evidence_ids, allowed_evidence_ids)
+    _validate_governance_boundary([parsed.answer, *parsed.follow_up_actions])
+    return parsed.model_dump(exclude_none=True)
 
 
 def openai_schema_for_task(task: str) -> dict:
-    return OPENAI_ANSWER_JSON_SCHEMA if task == "answer_question" else OPENAI_BRIEF_JSON_SCHEMA
+    """Compatibility helper for callers that still need a JSON schema."""
+    schema_model = LangChainAnswerResponse if task == "answer_question" else LangChainBriefResponse
+    return {
+        "name": f"fincredit_{task}",
+        "schema": schema_model.model_json_schema(),
+        "strict": True,
+    }
 
 
-def _validate_required(output: dict, fields: dict[str, type]) -> None:
-    for field, expected_type in fields.items():
-        if field not in output:
-            raise AgentOutputValidationError(f"Agent 输出缺少字段：{field}")
-        if not isinstance(output[field], expected_type):
-            raise AgentOutputValidationError(f"Agent 输出字段类型错误：{field}")
+def _validate_evidence(evidence_ids: list[str], allowed_evidence_ids: set[str] | None) -> None:
+    if len(evidence_ids) != len(set(evidence_ids)):
+        raise AgentOutputValidationError("Agent 输出包含重复的政策证据编号")
+    if allowed_evidence_ids is not None:
+        unknown = sorted(set(evidence_ids) - allowed_evidence_ids)
+        if unknown:
+            raise AgentOutputValidationError(f"Agent 输出引用了未检索到的政策证据：{', '.join(unknown)}")
 
 
-def _validate_governance_boundary(output: dict) -> None:
-    text = str(output)
-    forbidden_phrases = ("批准该笔授信", "拒绝该笔授信", "系统已批准", "系统已拒绝")
-    if any(phrase in text for phrase in forbidden_phrases):
+_DECISION_PATTERNS = (
+    re.compile(r"(?:系统已|决定|结论为|建议|应当|可以|予以|立即).{0,16}(?:批准|同意|拒绝|退回)"),
+    re.compile(r"(?:批准|拒绝|退回).{0,8}(?:该笔|本笔)?授信"),
+)
+
+
+def _validate_governance_boundary(parts: list[str]) -> None:
+    text = " ".join(parts)
+    # Explicit negative explanations are allowed; actionable decision language
+    # in the model-authored business content is not.
+    text = re.sub(r"(?:不得|不能|不可|不应|不建议).{0,8}(?:批准|同意|拒绝|退回)", "", text)
+    if any(pattern.search(text) for pattern in _DECISION_PATTERNS):
         raise AgentOutputValidationError("Agent 输出越过人工审批边界")

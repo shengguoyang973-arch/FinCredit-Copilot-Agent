@@ -18,3 +18,11 @@ def test_agent_tools_include_approval_status_for_process_questions() -> None:
     results = execute_agent_tools(application(), "下一步能不能提交审批？")
     tool_names = [item["tool_name"] for item in results]
     assert "get_approval_status" in tool_names
+
+
+def test_agent_tool_context_excludes_document_preview_and_registration_number() -> None:
+    results = execute_agent_tools(application())
+    snapshot = next(item["result"] for item in results if item["tool_name"] == "get_application_snapshot")
+    assert "masked_registration_no" not in snapshot["customer"]
+    materials = next(item["result"] for item in results if item["tool_name"] == "get_material_status")
+    assert all("extracted" not in document for document in materials["documents"])
