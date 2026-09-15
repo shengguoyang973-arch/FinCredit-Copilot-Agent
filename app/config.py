@@ -4,12 +4,13 @@ import os
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.4.0"
+    app_version: str = "0.5.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -33,6 +34,7 @@ class Settings:
     vector_store_backend: str = "memory"
     pgvector_connection: str = ""
     pgvector_collection: str = "fincredit_policy_chunks"
+    policy_timezone: str = "Asia/Shanghai"
     oidc_jwks_url: str = ""
     oidc_issuer: str = ""
     oidc_audience: str = ""
@@ -75,6 +77,7 @@ def get_settings() -> Settings:
         vector_store_backend=os.getenv("FINCREDIT_VECTOR_STORE_BACKEND", Settings.vector_store_backend).strip().lower(),
         pgvector_connection=os.getenv("FINCREDIT_PGVECTOR_CONNECTION", Settings.pgvector_connection).strip(),
         pgvector_collection=os.getenv("FINCREDIT_PGVECTOR_COLLECTION", Settings.pgvector_collection).strip(),
+        policy_timezone=os.getenv("FINCREDIT_POLICY_TIMEZONE", Settings.policy_timezone).strip(),
         oidc_jwks_url=os.getenv("FINCREDIT_OIDC_JWKS_URL", Settings.oidc_jwks_url).strip(),
         oidc_issuer=os.getenv("FINCREDIT_OIDC_ISSUER", Settings.oidc_issuer).strip(),
         oidc_audience=os.getenv("FINCREDIT_OIDC_AUDIENCE", Settings.oidc_audience).strip(),
@@ -115,6 +118,10 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("OPENAI_API_KEY 未配置，无法使用 OpenAI Embedding")
     if settings.vector_store_backend == "pgvector" and not settings.pgvector_connection:
         errors.append("FINCREDIT_PGVECTOR_CONNECTION 未配置")
+    try:
+        ZoneInfo(settings.policy_timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        errors.append("FINCREDIT_POLICY_TIMEZONE 不是有效的 IANA 时区")
     if settings.identity_provider == "oidc":
         required_oidc = {
             "FINCREDIT_OIDC_JWKS_URL": settings.oidc_jwks_url,

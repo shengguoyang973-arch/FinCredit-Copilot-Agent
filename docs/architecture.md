@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.4 adds versioned executable policy rules, OpenAI Embeddings, persistent pgvector retrieval, and enterprise OIDC/JWKS verification to the governed LangChain workflow.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.5 adds a four-eyes policy-rule release lifecycle, scheduled activation, immutable review hashes, version diffs, and governed rollback to the LangChain/pgvector/OIDC workflow.
 
 ## Module Layout
 
@@ -15,7 +15,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/security.py`: Fail-closed identity selection, role checks, and organization-scoped application access.
 - `app/identity.py`: Demo identity plus production JWT verification using JWKS, issuer, audience, algorithm allowlists, and claim mapping.
 - `app/services.py`: Business workflow orchestration for policy search, pre-review, Agent brief generation, real-time Agent Q&A, and approval submission.
-- `app/rule_store.py`: Versioned rule repository, seed rules, parameter/field allowlists, and one-active-version semantics.
+- `app/rule_store.py`: Versioned rule repository, safe validation, draft/review/schedule/activation state machine, content hashes, diffs, and rollback drafts.
 - `app/risk_rules.py`: Safe interpreters for admission, amount, threshold, and material rules; no dynamic code execution.
 - `app/embedding.py` / `app/vector_store.py`: Hash/OpenAI embedding adapters and memory/pgvector stores with persistent manifests.
 - `app/approval_policy.py`: Submission guardrail engine for missing materials, blocking rules, high-risk findings, and override reasons.
@@ -38,17 +38,19 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 1. A user selects an application and role in the workbench.
 2. API routes authenticate the demo user with `X-User-Id` and enforce role permissions.
 3. Service orchestration loads application, customer, policy, and material status from stores.
-4. The pre-review engine loads the active rule versions and produces deterministic findings plus their required policy IDs.
-5. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
-6. The tool allowlist supplies minimized, read-only business context without document body previews.
-7. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
-8. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
-9. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`.
-10. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
-11. The approval policy engine evaluates whether the application can be submitted.
-12. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
-13. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions; returned applications must be re-reviewed before resubmission.
-14. Audit writes extend a SHA-256 chain that compliance users can verify through the integrity endpoint.
+4. Separately, compliance authors create immutable rule drafts; another compliance actor reviews the diff and approves, rejects, or schedules the version.
+5. Due scheduled rules atomically retire the previous active version and extend the audit chain.
+6. The pre-review engine loads only active rule versions and produces deterministic findings plus their required policy IDs.
+7. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
+8. The tool allowlist supplies minimized, read-only business context without document body previews.
+9. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
+10. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
+11. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`.
+12. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
+13. The approval policy engine evaluates whether the application can be submitted.
+14. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
+15. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions; returned applications must be re-reviewed before resubmission.
+16. Audit writes extend a SHA-256 chain that compliance users can verify through the integrity endpoint.
 
 ## Current Guardrails
 
@@ -75,6 +77,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - OIDC validates the JWT signature by `kid` against cached JWKS keys and requires `exp`, `iat`, `iss`, `sub`, and `aud` claims.
 - Production readiness requires OIDC, OpenAI Embeddings, and pgvector; local-only adapters cannot silently pass production checks.
 - Rule imports are limited to four interpreters and approved business fields; message placeholders are validated before activation.
+- Rule authors and submitters cannot approve their own version; pending content is hash-checked, and rollback creates a new reviewable draft.
 - pgvector refreshes use stable IDs, a manifest, and a PostgreSQL advisory lock so multi-worker updates upsert before stale-vector cleanup.
 - Application access is scoped to the creator's organization except for compliance administrators.
 - Audit events include previous/current SHA-256 hashes, with a compliance-only integrity endpoint.

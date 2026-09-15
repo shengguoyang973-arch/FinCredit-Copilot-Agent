@@ -71,6 +71,20 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_policy_rules_active ON policy_rules(is_active, id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_policy_rules_one_active ON policy_rules(id) WHERE is_active = 1",
     )),
+    ("0005_policy_rule_lifecycle", (
+        "ALTER TABLE policy_rules ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+        "ALTER TABLE policy_rules ADD COLUMN created_by TEXT NOT NULL DEFAULT 'system'",
+        "ALTER TABLE policy_rules ADD COLUMN submitted_by TEXT",
+        "ALTER TABLE policy_rules ADD COLUMN reviewed_by TEXT",
+        "ALTER TABLE policy_rules ADD COLUMN review_comment TEXT",
+        "ALTER TABLE policy_rules ADD COLUMN activated_at TEXT",
+        "UPDATE policy_rules SET status = CASE WHEN is_active = 1 THEN 'active' ELSE 'retired' END",
+        "CREATE INDEX IF NOT EXISTS idx_policy_rules_lifecycle ON policy_rules(status, effective_date, id)",
+    )),
+    ("0006_policy_rule_integrity", (
+        "ALTER TABLE policy_rules ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_policy_rules_one_scheduled ON policy_rules(id) WHERE status = 'scheduled'",
+    )),
 )
 
 

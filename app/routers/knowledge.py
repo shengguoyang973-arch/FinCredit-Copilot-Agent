@@ -9,8 +9,21 @@ from app.domain import PolicyClause, PolicyRule, Role, User
 from app.knowledge_store import list_policies, save_policy
 from app.rag import RAGConfig, retrieve_policy_context
 from app.repository import audit
-from app.rule_store import list_policy_rules, save_policy_rule
-from app.schemas import PolicyImportRequest, PolicyRuleImportRequest, PolicySearchRequest
+from app.rule_store import (
+    create_policy_rule_draft,
+    create_rollback_draft,
+    decide_policy_rule,
+    list_policy_rules,
+    policy_rule_diff,
+    submit_policy_rule,
+)
+from app.schemas import (
+    PolicyImportRequest,
+    PolicyRuleDecisionRequest,
+    PolicyRuleImportRequest,
+    PolicyRuleRollbackRequest,
+    PolicySearchRequest,
+)
 from app.security import current_user, require_roles
 
 router = APIRouter(prefix="/v1/knowledge", tags=["knowledge"])
@@ -79,6 +92,20 @@ def policy_rules(include_inactive: bool = False, user: User = Depends(current_us
     return {"items": [asdict(rule) | {"is_active": (rule.id, rule.version) in active_versions} for rule in items]}
 
 
+@router.get("/rules/{rule_id}/versions/{version}/diff")
+def rule_version_diff(
+    rule_id: str,
+    version: str,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        result = policy_rule_diff(rule_id, version)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    audit("policy_rule_diff_viewed", user.id, rule_id, version=version, baseline_version=result["baseline_version"])
+    return result
+
+
 @router.post("/rules", status_code=status.HTTP_201_CREATED)
 def import_policy_rule(body: PolicyRuleImportRequest, user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN))) -> dict:
     rule = PolicyRule(
@@ -87,8 +114,49 @@ def import_policy_rule(body: PolicyRuleImportRequest, user: User = Depends(requi
         body.effective_date, body.source_name,
     )
     try:
-        save_policy_rule(rule)
+        draft = create_policy_rule_draft(rule, user.id)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    audit("policy_rule_imported", user.id, rule.id, version=rule.version, policy_id=rule.policy_id, rule_type=rule.rule_type)
-    return {"message": "政策规则新版本已启用", "rule": asdict(rule)}
+    return {"message": "政策规则草稿已创建，须提交并由另一名合规管理员复核", "rule": asdict(draft)}
+
+
+@router.post("/rules/{rule_id}/versions/{version}/submit")
+def submit_rule(rule_id: str, version: str, user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN))) -> dict:
+    try:
+        rule = submit_policy_rule(rule_id, version, user.id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"message": "政策规则已提交复核", "rule": asdict(rule)}
+
+
+@router.post("/rules/{rule_id}/versions/{version}/decision")
+def decide_rule(
+    rule_id: str,
+    version: str,
+    body: PolicyRuleDecisionRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        rule = decide_policy_rule(rule_id, version, user.id, body.decision, body.comment)
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    message = "政策规则复核通过" if body.decision == "approved" else "政策规则已驳回"
+    return {"message": message, "rule": asdict(rule)}
+
+
+@router.post("/rules/{rule_id}/rollback", status_code=status.HTTP_201_CREATED)
+def rollback_rule(
+    rule_id: str,
+    body: PolicyRuleRollbackRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        draft = create_rollback_draft(
+            rule_id, body.target_version, body.new_version,
+            body.effective_date, body.reason, user.id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"message": "回滚草稿已创建，仍须四眼复核", "rule": asdict(draft)}

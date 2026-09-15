@@ -1,6 +1,6 @@
 # 生产运行：规则、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v0.4 提供三条可独立测试、但在生产必须同时启用的链路：配置化政策规则、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签。`GET /ready` 会拒绝任何缺项，不会自动降级到演示实现。
+FinCredit Copilot v0.5 提供四条可独立测试、但在生产共同受控的链路：政策规则发布生命周期、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -25,6 +25,7 @@ OPENAI_API_KEY=<inject-from-secret-manager>
 FINCREDIT_VECTOR_STORE_BACKEND=pgvector
 FINCREDIT_PGVECTOR_CONNECTION=postgresql+psycopg://user:password@host:5432/fincredit
 FINCREDIT_PGVECTOR_COLLECTION=fincredit_policy_chunks
+FINCREDIT_POLICY_TIMEZONE=Asia/Shanghai
 ```
 
 不要把密钥或带密码的连接串提交到 Git。应由 Secret Manager、Kubernetes Secret 或同等受控设施注入。
@@ -40,9 +41,11 @@ FINCREDIT_PGVECTOR_COLLECTION=fincredit_policy_chunks
 | `any_threshold` | 任一阈值触发人工审查 | 白名单字段、`gt/gte/lt/lte`、数值 |
 | `required_materials` | 必需材料集合 | 材料类型到展示标签的映射 |
 
-合规管理员调用 `POST /v1/knowledge/rules` 发布新版本。同一 `id` 只有一个 active 版本；发布事务先停用旧版本，再启用新版本。`GET /v1/knowledge/rules?include_inactive=true` 可查询历史，审计链记录发布人与版本。规则若引用 `policy_id`，该条款会作为确定性强制证据加入 RAG Trace。
+合规作者调用 `POST /v1/knowledge/rules` 创建不可变草稿，然后提交复核；另一名合规管理员才能批准或驳回。生效日不晚于当前日期时，批准事务先停用旧版本再启用新版本；未来日期版本进入 `scheduled`，到期后在规则读取边界原子切换。`GET /v1/knowledge/rules?include_inactive=true` 可查询全历史，审计链记录作者、提交人、复核人、决定和切换事件。规则若引用 `policy_id`，该条款会作为确定性强制证据加入 RAG Trace。
 
-发布前至少执行规则单元测试、脱敏回放和 `scripts/release_gate.py`。生产数据库仍应额外实现双人复核、计划生效时间和回滚审批。
+待复核版本保存 canonical SHA-256；审批时重新计算并拒绝已被修改的内容。复核人可先读取结构化 diff。回滚不会直接重启历史记录，而是从已批准版本复制出带原因的新草稿，再完整走一遍四眼流程。详细 API 见 [政策规则发布生命周期](policy-rule-lifecycle.md)。
+
+发布前至少执行规则单元测试、脱敏回放和 `scripts/release_gate.py`。生产环境还应把计划生效扫描迁移到受监控的调度作业，并为逾期未审任务配置告警。
 
 ## Embedding 与向量索引
 

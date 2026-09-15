@@ -10,4 +10,5 @@ USERS = {
     "rm_001": User("rm_001", "李风险经理", {Role.RISK_MANAGER}, "branch-shanghai", {"region": "华东"}),
     "approver_001": User("approver_001", "陈审批人", {Role.APPROVER}, "branch-shanghai", {"region": "华东"}),
     "compliance_001": User("compliance_001", "周合规管理员", {Role.COMPLIANCE_ADMIN}, "head-office", {"region": "全国"}),
+    "compliance_002": User("compliance_002", "赵合规复核员", {Role.COMPLIANCE_ADMIN}, "head-office", {"region": "全国"}),
 }

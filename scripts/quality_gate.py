@@ -155,7 +155,7 @@ def scenario_audit_chain_is_verifiable() -> None:
     assert integrity["event_count"] > 0
 
 
-def scenario_policy_rule_version_is_applied() -> None:
+def scenario_policy_rule_four_eyes_lifecycle() -> None:
     body = {
         "id": "POL-2.1", "policy_id": "POL-2.1", "version": "quality-2026.02",
         "rule_type": "ratio_cap",
@@ -167,6 +167,17 @@ def scenario_policy_rule_version_is_applied() -> None:
     }
     response = client.post("/v1/knowledge/rules", headers={"X-User-Id": "compliance_001"}, json=body)
     assert response.status_code == 201, response.text
+    submission = client.post(
+        "/v1/knowledge/rules/POL-2.1/versions/quality-2026.02/submit",
+        headers={"X-User-Id": "compliance_001"},
+    )
+    assert submission.status_code == 200, submission.text
+    decision_response = client.post(
+        "/v1/knowledge/rules/POL-2.1/versions/quality-2026.02/decision",
+        headers={"X-User-Id": "compliance_002"},
+        json={"decision": "approved", "comment": "质量门禁独立复核规则阈值与回放结果。"},
+    )
+    assert decision_response.status_code == 200, decision_response.text
     decision = evaluate_pre_review_rules(
         LoanApplication("APP-QUALITY", "C-QUALITY", 300_000, 12, "流动资金", "sales_001"),
         {"operating_years": 6, "annual_revenue": 2_000_000, "debt_ratio": 0.2, "overdue_days_12m": 0},
@@ -193,7 +204,7 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("business_question_is_answered_and_traced", scenario_business_question_is_answered_and_traced),
     ("observability_metrics_track_agent_health", scenario_observability_metrics_track_agent_health),
     ("approval_separation_of_duties", scenario_approval_separation_of_duties),
-    ("policy_rule_version_is_applied", scenario_policy_rule_version_is_applied),
+    ("policy_rule_four_eyes_lifecycle", scenario_policy_rule_four_eyes_lifecycle),
     ("production_runtime_fails_closed", scenario_production_runtime_fails_closed),
     ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )

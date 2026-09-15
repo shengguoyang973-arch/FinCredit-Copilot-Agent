@@ -45,3 +45,8 @@ def test_production_readiness_rejects_local_embedding_and_vector_store() -> None
         get_embedding_adapter(Settings(deployment_environment="production"))
     with pytest.raises(RuntimeError, match="内存向量库"):
         get_vector_store(HashEmbeddingAdapter(), Settings(deployment_environment="production"))
+
+
+def test_invalid_policy_timezone_fails_readiness() -> None:
+    errors = validate_settings(Settings(policy_timezone="Mars/Olympus"))
+    assert "FINCREDIT_POLICY_TIMEZONE 不是有效的 IANA 时区" in errors

@@ -50,22 +50,33 @@ def get_customer(customer_id: str) -> dict | None:
 
 
 def audit(action: str, actor_id: str, resource_id: str, **detail: object) -> None:
+    with _connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        audit_in_transaction(connection, action, actor_id, resource_id, **detail)
+
+
+def audit_in_transaction(
+    connection: sqlite3.Connection,
+    action: str,
+    actor_id: str,
+    resource_id: str,
+    **detail: object,
+) -> None:
+    """Append to the audit hash chain inside an existing write transaction."""
     request_id = current_request_id()
     if request_id:
         detail = detail | {"request_id": request_id}
     detail_json = json.dumps(detail, ensure_ascii=False, default=str, sort_keys=True, separators=(",", ":"))
     timestamp = datetime.now(timezone.utc).isoformat()
-    with _connection() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        previous = connection.execute("SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
-        prev_hash = str(previous["event_hash"]) if previous else ""
-        event_hash = _audit_event_hash(prev_hash, action, actor_id, resource_id, detail_json, timestamp)
-        connection.execute(
-            """INSERT INTO audit_events(
-                action, actor_id, resource_id, detail_json, timestamp, prev_hash, event_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (action, actor_id, resource_id, detail_json, timestamp, prev_hash, event_hash),
-        )
+    previous = connection.execute("SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
+    prev_hash = str(previous["event_hash"]) if previous else ""
+    event_hash = _audit_event_hash(prev_hash, action, actor_id, resource_id, detail_json, timestamp)
+    connection.execute(
+        """INSERT INTO audit_events(
+            action, actor_id, resource_id, detail_json, timestamp, prev_hash, event_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (action, actor_id, resource_id, detail_json, timestamp, prev_hash, event_hash),
+    )
 
 
 def list_audit_events() -> list[AuditEvent]:

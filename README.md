@@ -2,7 +2,7 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.4 在 LangChain 编排和审批治理基础上，加入政策规则版本化、OpenAI Embedding、PostgreSQL/pgvector 持久向量检索，以及企业 OIDC JWT/JWKS 验签；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.5 在 LangChain、pgvector 与企业 OIDC 基础上，进一步加入政策规则草稿、四眼复核、计划生效、内容哈希锁定和受控回滚生命周期；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -11,6 +11,8 @@ LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/la
 身份、审批一致性与审计完整性说明见 [docs/governed-workflow.md](docs/governed-workflow.md)。
 
 生产 RAG、规则配置和 OIDC 部署说明见 [docs/production-runtime.md](docs/production-runtime.md)。
+
+规则发布状态机、复核 API 和回滚流程见 [docs/policy-rule-lifecycle.md](docs/policy-rule-lifecycle.md)。
 
 API 已按领域拆分到 `app/routers/`，`main.py` 只负责应用装配、静态工作台和路由注册。
 
@@ -31,7 +33,7 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 - 脱敏模拟客户、授信申请与交易流水查询；申请状态和审计事件均持久化
 - 带版本与条款号的授信政策检索
 - SQLite 持久化政策库；合规管理员可通过接口新增或更新政策条款
-- 政策规则配置化：四类白名单规则、参数字段校验、单一生效版本、历史版本保留和合规导入审计
+- 政策规则发布治理：四类白名单规则、不可变草稿、作者/复核人分离、结构化版本 diff、计划生效、哈希锁定与受控回滚
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -54,7 +56,7 @@ uvicorn app.main:app --reload
 
 开发和 CI 环境使用 `pip install -r requirements-dev.txt`，其中包含 Ruff 与 Coverage；相关配置统一保存在 `pyproject.toml`。
 
-访问 `http://127.0.0.1:8000/` 使用审批工作台；`http://127.0.0.1:8000/docs` 保留为接口文档。工作台可直接切换演示身份：`rm_001`（风险经理）、`approver_001`（审批人）、`sales_001`（客户经理）、`compliance_001`（合规管理员）。
+访问 `http://127.0.0.1:8000/` 使用审批工作台；`http://127.0.0.1:8000/docs` 保留为接口文档。工作台可直接切换演示身份：`rm_001`（风险经理）、`approver_001`（审批人）、`sales_001`（客户经理）、`compliance_001`（规则作者）和 `compliance_002`（独立复核人）。
 
 ## Docker 启动
 
@@ -98,6 +100,7 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 - `FINCREDIT_VECTOR_STORE_BACKEND`：`memory` 或 `pgvector`；生产环境必须是 `pgvector`。
 - `FINCREDIT_PGVECTOR_CONNECTION`：SQLAlchemy/psycopg 连接串，例如 `postgresql+psycopg://user:password@host/db`。
 - `FINCREDIT_PGVECTOR_COLLECTION`：政策向量集合名，默认 `fincredit_policy_chunks`。
+- `FINCREDIT_POLICY_TIMEZONE`：计划生效使用的 IANA 业务时区，默认 `Asia/Shanghai`。
 
 `FINCREDIT_ENVIRONMENT=production` 时，就绪检查要求同时配置 `oidc + openai embedding + pgvector`。完整模板、Token 声明和索引命令见 [生产运行文档](docs/production-runtime.md)。
 
@@ -142,9 +145,9 @@ python scripts\index_policies.py
 
 ## 政策规则版本管理
 
-合规管理员通过 `POST /v1/knowledge/rules` 导入规则。系统只接受 `minimum`、`ratio_cap`、`any_threshold`、`required_materials` 四种解释器和显式字段白名单；同一规则 ID 的新版本会原子停用旧版本，但历史记录仍可通过 `GET /v1/knowledge/rules?include_inactive=true` 查询。示例见 `demo_data/policy_rule_import_example.json`。
+合规管理员通过 `POST /v1/knowledge/rules` 创建草稿。系统只接受 `minimum`、`ratio_cap`、`any_threshold`、`required_materials` 四种解释器和显式字段白名单；草稿提交后必须由另一名合规管理员批准。立即生效版本会原子停用旧版本，未来日期版本进入 `scheduled` 并在首次读取时短事务切换。历史记录可通过 `GET /v1/knowledge/rules?include_inactive=true` 查询，示例见 `demo_data/policy_rule_import_example.json`。
 
-政策正文与可执行规则分离：`policy_id` 把规则发现结果绑定到 RAG 强制证据，`MAT-1` 等无正文规则可将 `policy_id` 置空。所有导入操作进入审计链。
+复核前可调用版本 diff 接口查看相对当前生效版的参数、严重度、消息与生效日变化。规则内容从建稿到审批由 SHA-256 锁定；回滚会复制已批准版本生成新草稿，不能绕过四眼复核。政策正文与可执行规则分离：`policy_id` 把规则发现结果绑定到 RAG 强制证据，`MAT-1` 等无正文规则可将 `policy_id` 置空。所有状态变化进入审计链。
 
 ## 质量门禁
 
@@ -156,7 +159,7 @@ python scripts\tune_rag.py
 python -m pytest -q
 ```
 
-`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 11 个场景覆盖高风险规则命中、规则版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答追踪、Agent 指标聚合、Agent 输出治理边界、审批职责分离和审计链校验。
+`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 11 个场景覆盖高风险规则命中、规则四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答追踪、Agent 指标聚合、Agent 输出治理边界、审批职责分离和审计链校验。
 
 `release_gate.py` 在质量门禁之上增加 Prompt/Provider 与 RAG 评测门槛，检查准确率、证据引用率、人工审批边界、RAG Hit Rate、Recall 和 MRR；`GET /ready` 用于容器就绪探针。
 

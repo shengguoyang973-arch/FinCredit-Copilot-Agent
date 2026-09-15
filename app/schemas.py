@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _validate_iso_date(value: str) -> str:
+    try:
+        date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("必须是有效的 ISO 日期") from error
+    return value
 
 
 class PolicySearchRequest(BaseModel):
@@ -18,6 +27,8 @@ class PolicyImportRequest(BaseModel):
     keywords: list[str] = Field(min_length=1, max_length=20)
     source_name: str = Field(min_length=2, max_length=200)
 
+    _effective_date_is_valid = field_validator("effective_date")(_validate_iso_date)
+
 
 class PolicyRuleImportRequest(BaseModel):
     id: str = Field(pattern=r"^[A-Z][A-Z0-9.-]{2,50}$")
@@ -31,6 +42,22 @@ class PolicyRuleImportRequest(BaseModel):
     pass_message: str = Field(min_length=2, max_length=1000)
     effective_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     source_name: str = Field(min_length=2, max_length=200)
+
+    _effective_date_is_valid = field_validator("effective_date")(_validate_iso_date)
+
+
+class PolicyRuleDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    comment: str = Field(min_length=5, max_length=1000)
+
+
+class PolicyRuleRollbackRequest(BaseModel):
+    target_version: str = Field(min_length=3, max_length=30)
+    new_version: str = Field(min_length=3, max_length=30)
+    effective_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    reason: str = Field(min_length=5, max_length=500)
+
+    _effective_date_is_valid = field_validator("effective_date")(_validate_iso_date)
 
 
 class ApprovalDecisionRequest(BaseModel):

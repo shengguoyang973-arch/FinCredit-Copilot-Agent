@@ -39,3 +39,9 @@ def test_governed_workflow_columns_are_present() -> None:
         audit_columns = {row["name"] for row in connection.execute("PRAGMA table_info(audit_events)")}
     assert {"reviewed_by", "report_hash"}.issubset(approval_columns)
     assert {"prev_hash", "event_hash"}.issubset(audit_columns)
+
+
+def test_policy_rule_lifecycle_columns_are_present() -> None:
+    with database.connection() as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(policy_rules)")}
+    assert {"status", "created_by", "submitted_by", "reviewed_by", "review_comment", "activated_at"}.issubset(columns)

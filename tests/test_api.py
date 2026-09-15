@@ -26,12 +26,13 @@ def test_workbench_is_available() -> None:
     assert "授信尽调与审批协同智能中枢" in response.text
     assert "企业级金融智能体操作系统" in response.text
     assert "智能体运行观测" in response.text
+    assert "compliance_002" in response.text
 
 
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.4.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.5.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:

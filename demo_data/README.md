@@ -10,7 +10,7 @@
 4. 点击“生成预审报告”，观察政策证据链、规则命中和智能体评述。
 5. 在“智能体业务问答”中复制 `agent_questions.json` 里的问题进行演示。
 6. 切换为“周合规管理员”，点击“刷新指标”，查看智能体运行观测面板。
-7. 使用 `policy_rule_import_example.json` 调用 `POST /v1/knowledge/rules`，再查询 `?include_inactive=true` 验证规则版本切换。
+7. 以 `compliance_001` 使用 `policy_rule_import_example.json` 创建规则草稿并提交，再以 `compliance_002` 独立复核，最后查询 `?include_inactive=true` 验证版本切换和职责链。
 
 ## 案例说明
 

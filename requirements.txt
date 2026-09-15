@@ -10,3 +10,4 @@ langchain-openai>=1.6,<2.0
 langchain-postgres>=0.0.17,<0.1
 psycopg[binary,pool]>=3.3,<4
 PyJWT[crypto]>=2.14,<3
+tzdata>=2025.2

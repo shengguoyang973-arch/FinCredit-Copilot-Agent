@@ -21,6 +21,15 @@ class ApplicationStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class PolicyRuleStatus(StrEnum):
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    SCHEDULED = "scheduled"
+    ACTIVE = "active"
+    REJECTED = "rejected"
+    RETIRED = "retired"
+
+
 @dataclass(frozen=True)
 class User:
     id: str
@@ -64,6 +73,14 @@ class PolicyRule:
     pass_message: str
     effective_date: str
     source_name: str
+    status: PolicyRuleStatus = PolicyRuleStatus.ACTIVE
+    is_active: bool = True
+    created_by: str = "system"
+    submitted_by: str | None = None
+    reviewed_by: str | None = None
+    review_comment: str | None = None
+    activated_at: str | None = None
+    content_hash: str = ""
 
 
 @dataclass
