@@ -46,3 +46,12 @@ class OIDCIdentityProvider:
 
 def claims_to_user(claims: IdentityClaims) -> User:
     return User(claims.subject, claims.name, set(claims.roles), claims.organization_id, dict(claims.attributes))
+
+
+def identity_provider_for(name: str) -> IdentityProvider:
+    """Resolve only explicitly supported providers; unknown values fail closed."""
+    if name == DemoHeaderIdentityProvider.name:
+        return DemoHeaderIdentityProvider()
+    if name == OIDCIdentityProvider.name:
+        return OIDCIdentityProvider()
+    raise RuntimeError(f"未配置的身份提供方：{name}")

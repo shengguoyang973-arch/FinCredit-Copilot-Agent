@@ -2,11 +2,13 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent MVP。v0.2 使用 LangChain 统一模型调用、结构化输出和 RAG 检索接口；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent MVP。v0.3 使用 LangChain 统一模型调用、结构化输出和 RAG 检索接口，并加入原子审批、职责分离和防篡改审计链；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
 LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/langchain-rag.md](docs/langchain-rag.md)。
+
+身份、审批一致性与审计完整性说明见 [docs/governed-workflow.md](docs/governed-workflow.md)。
 
 API 已按领域拆分到 `app/routers/`，`main.py` 只负责应用装配、静态工作台和路由注册。
 
@@ -15,6 +17,10 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 ## 已实现
 
 - 基于角色的访问控制（客户经理、风险经理、审批人、合规管理员）
+- 身份提供方默认拒绝：未知 Provider 返回服务不可用，生产环境就绪检查禁止演示身份头
+- 组织级 ABAC、审批职责分离、唯一审批任务历史和报告哈希锁定
+- 预审持久化、审批提交与审批决策使用 SQLite 原子事务和条件状态更新
+- SHA-256 链式审计事件及合规完整性校验接口
 - LangChain LCEL 模型管线：`ChatPromptTemplate -> ChatModel -> Pydantic structured output`
 - LangChain `BaseRetriever` 标准接口下的政策混合检索、引用和检索轨迹
 - RAG 离线评测与参数网格搜索，覆盖 Hit Rate、Recall、MRR 和综合分数
@@ -57,6 +63,8 @@ docker compose up --build
 ## 配置
 
 - `FINCREDIT_DATA_DIR`：本地数据库和上传材料保存目录，默认 `data/`。
+- `FINCREDIT_ENVIRONMENT`：运行环境，可选 `development`、`test`、`production`；生产环境禁止 `demo-header`。
+- `FINCREDIT_IDENTITY_PROVIDER`：身份提供方，只接受 `demo-header` 或 `oidc`；未知值不会降级为演示身份。
 - `FINCREDIT_AGENT_PROVIDER`：Agent Provider 名称，默认 `deterministic-local`。
 - `OPENAI_API_KEY`：使用真实 OpenAI Provider 时必需。
 - `OPENAI_MODEL`：真实模型名称，默认 `gpt-4.1-mini`。
@@ -119,7 +127,7 @@ python scripts\tune_rag.py
 python -m pytest -q
 ```
 
-`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前覆盖高风险规则命中、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答追踪、Agent 指标聚合和 Agent 输出治理边界。
+`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 9 个场景覆盖高风险规则命中、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答追踪、Agent 指标聚合、Agent 输出治理边界、审批职责分离和审计链校验。
 
 `release_gate.py` 在质量门禁之上增加 Prompt/Provider 与 RAG 评测门槛，检查准确率、证据引用率、人工审批边界、RAG Hit Rate、Recall 和 MRR；`GET /ready` 用于容器就绪探针。
 
@@ -135,9 +143,11 @@ python -m pytest -q
 
 政策条款导入接口需要 `X-User-Id: compliance_001`。数据库会自动创建在 `data/fincredit.db`；它仅含演示政策，禁止放入真实客户或生产制度数据。
 
-提交预审后会产生 `APR-<申请编号>` 审批任务。仅 `approver_001` 可通过 `POST /v1/approval-tasks/{task_id}/decision` 给出 `approved`、`rejected` 或 `returned` 决策，并必须填写人工审批意见。
+提交预审后会产生 `APR-<申请编号>-<唯一后缀>` 审批任务，每次退回重提都会保留一条独立历史记录。仅 `approver_001` 可通过 `POST /v1/approval-tasks/{task_id}/decision` 给出 `approved`、`rejected` 或 `returned` 决策，并必须填写人工审批意见。
 
 提交审批前会执行策略校验：必需材料缺失或命中阻断规则时不能提交；命中高风险规则时，风险经理必须在请求体中提供 `override_reason`。策略结果会写入审批任务和审计日志。
+
+审批任务锁定提交时的预审报告 SHA-256；最终审批前会再次验证报告未变化。申请创建人、预审/提交人不能审批自己的任务，重复或并发决策会通过条件更新拒绝。退回后申请进入独立的 `returned` 状态，必须重新预审才可再次提交。`GET /v1/audit-events/integrity` 供合规管理员验证本地审计哈希链。
 
 材料接口使用原始字节请求体和 `X-Filename` 请求头：`PUT /v1/applications/{application_id}/materials/{document_type}`。演示版只支持 UTF-8 文本/CSV 的保守规则抽取，材料类型为 `business_license`、`financial_statement` 和 `bank_statement`，单文件上限为 2MB。
 
@@ -153,13 +163,13 @@ Agent 当前白名单工具包括：`get_application_snapshot`、`get_material_s
 
 ## 重要边界
 
-本项目使用完全模拟、脱敏的数据。生产接入前必须替换内存仓储为受控数据服务，接入统一身份认证、字段级权限、密钥管理、DLP、不可篡改审计和人工审批流程。
+本项目使用完全模拟、脱敏的数据。当前 SQLite 哈希链能够发现修改，但不等同于外部 WORM/不可变存储。生产接入前仍须替换本地仓储为受控数据服务，接入企业 OIDC、字段级权限、密钥管理、DLP、不可篡改日志平台和人工审批流程。
 
 ## 生产上线清单
 
-- 将演示身份头替换为企业 SSO/OIDC，并在服务端强制 RBAC 与字段级数据权限。
+- 配置并验证企业 SSO/OIDC JWKS、签发方、受众、Token 时钟偏差与撤销策略；生产环境不得启用演示身份头。
 - 接入受管对象存储、恶意文件扫描、OCR/版面解析与文档保留策略；不得把未脱敏材料直接发送给外部模型。
-- 替换 SQLite 为受管数据库，审计事件写入不可篡改日志平台，并配置备份、告警和灾备。
+- 替换 SQLite 为支持事务隔离和行锁的受管数据库；将本地防篡改哈希链复制到 WORM/SIEM，并配置备份、告警和灾备。
 - 以脱敏、标注过的真实案例建立评测集，覆盖事实准确率、工具调用失败率、越权率、拒答率、延迟与成本。
 - 将 RAG 演示评测集扩展为经合规审批的训练集、验证集和时间外测试集，并为每次参数或模型变更保存版本和回滚点。
 - 将核心、征信、CRM 和 OA 系统接入限制为最小权限的受控工具；任何高风险写操作均保留人工确认。

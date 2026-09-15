@@ -4,7 +4,7 @@ from app.document_store import material_check
 from app.knowledge_store import get_policies
 from app.repository import get_customer
 from app.risk_rules import POLICY_EVIDENCE_IDS
-from app.workflow_store import get_approval_task
+from app.workflow_store import get_latest_approval_task
 
 ALLOWED_AGENT_TOOLS = {
     "get_application_snapshot",
@@ -68,8 +68,15 @@ def _execute_tool(tool_name: str, application) -> dict:
     if tool_name == "get_policy_evidence":
         return {"policy_ids": [policy.id for policy in get_policies(POLICY_EVIDENCE_IDS)]}
     if tool_name == "get_approval_status":
-        task = get_approval_task(f"APR-{application.id}")
-        return {"task": task}
+        task = get_latest_approval_task(application.id)
+        if not task:
+            return {"task": None}
+        return {"task": {
+            "id": task["id"],
+            "status": task["status"],
+            "submitted_at": task["submitted_at"],
+            "decided_at": task["decided_at"],
+        }}
     raise ValueError(f"Agent 工具未实现：{tool_name}")
 
 

@@ -17,7 +17,10 @@ os.environ["FINCREDIT_DATA_DIR"] = str(TEMP_DATA_DIR)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.approval_policy import evaluate_submission_policy  # noqa: E402
+from app.domain import Role, User  # noqa: E402
 from app.main import app  # noqa: E402
+from app.repository import USERS  # noqa: E402
+from app.state_store import verify_audit_chain  # noqa: E402
 
 client = TestClient(app)
 
@@ -117,6 +120,38 @@ def scenario_observability_metrics_track_agent_health() -> None:
     assert body["tool_counts"]["get_approval_status"] >= 1
 
 
+def scenario_approval_separation_of_duties() -> None:
+    USERS["quality_dual_001"] = User(
+        "quality_dual_001",
+        "质量门禁双重角色",
+        {Role.RISK_MANAGER, Role.APPROVER},
+        "branch-shanghai",
+    )
+    try:
+        upload_required_materials()
+        headers = {"X-User-Id": "quality_dual_001"}
+        review = client.post("/v1/applications/APP001/pre-review", headers=headers)
+        assert review.status_code == 200, review.text
+        submission = client.post("/v1/applications/APP001/submit", headers=headers)
+        assert submission.status_code == 200, submission.text
+        task_id = submission.json()["approval_task"]["id"]
+        decision = client.post(
+            f"/v1/approval-tasks/{task_id}/decision",
+            headers=headers,
+            json={"decision": "approved", "comment": "同一用户不应完成最终审批。"},
+        )
+        assert decision.status_code == 409, decision.text
+        assert "职责分离" in decision.json()["detail"]
+    finally:
+        USERS.pop("quality_dual_001", None)
+
+
+def scenario_audit_chain_is_verifiable() -> None:
+    integrity = verify_audit_chain()
+    assert integrity["valid"] is True
+    assert integrity["event_count"] > 0
+
+
 SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("rule_hits_for_high_risk_application", scenario_rule_hits_for_high_risk_application),
     ("unauthorized_actions_are_rejected", scenario_unauthorized_actions_are_rejected),
@@ -125,6 +160,8 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("agent_output_stays_within_governance_boundary", scenario_agent_output_stays_within_governance_boundary),
     ("business_question_is_answered_and_traced", scenario_business_question_is_answered_and_traced),
     ("observability_metrics_track_agent_health", scenario_observability_metrics_track_agent_health),
+    ("approval_separation_of_duties", scenario_approval_separation_of_duties),
+    ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )
 
 

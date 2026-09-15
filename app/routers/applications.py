@@ -49,7 +49,7 @@ def application_materials(application_id: str, user: User = Depends(current_user
 
 
 @router.put("/{application_id}/materials/{document_type}", status_code=status.HTTP_201_CREATED)
-def upload_material(application_id: str, document_type: str, content: bytes = Body(), filename: str = Header(..., alias="X-Filename"), content_type: str = Header("application/octet-stream", alias="Content-Type"), user: User = Depends(current_user)) -> dict:
+def upload_material(application_id: str, document_type: str, content: bytes = Body(), filename: str = Header(..., alias="X-Filename"), content_type: str = Header("application/octet-stream", alias="Content-Type"), user: User = Depends(require_roles(Role.ACCOUNT_MANAGER))) -> dict:
     assert_application_access(application_id, user)
     if document_type not in ALLOWED_TYPES:
         raise HTTPException(status_code=422, detail="不支持的材料类型")
@@ -68,7 +68,12 @@ def run_pre_review(application_id: str, user: User = Depends(require_roles(Role.
     application = get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="授信申请不存在")
-    return pre_review(application, user)
+    if not can_access_application(application, user):
+        raise HTTPException(status_code=403, detail="当前组织无权访问该授信申请")
+    try:
+        return pre_review(application, user)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
 
 @router.get("/{application_id}/pre-review-report")
@@ -82,11 +87,11 @@ def review_report(application_id: str, user: User = Depends(current_user)) -> di
     if not report:
         raise HTTPException(status_code=404, detail="该申请尚未生成预审报告")
     audit("review_report_viewed", user.id, application_id)
-    return report
+    return report | {"customer_snapshot": filter_customer_fields(report.get("customer_snapshot"), user)}
 
 
 @router.get("/{application_id}/agent-runs")
-def agent_runs(application_id: str, user: User = Depends(current_user)) -> dict:
+def agent_runs(application_id: str, user: User = Depends(require_roles(Role.RISK_MANAGER, Role.APPROVER, Role.COMPLIANCE_ADMIN))) -> dict:
     assert_application_access(application_id, user)
     runs = list_agent_runs(application_id)
     audit("agent_runs_viewed", user.id, application_id, result_count=len(runs))
@@ -94,7 +99,7 @@ def agent_runs(application_id: str, user: User = Depends(current_user)) -> dict:
 
 
 @router.get("/{application_id}/agent-runs/{run_id}/events")
-def agent_run_events(application_id: str, run_id: str, user: User = Depends(current_user)) -> dict:
+def agent_run_events(application_id: str, run_id: str, user: User = Depends(require_roles(Role.RISK_MANAGER, Role.APPROVER, Role.COMPLIANCE_ADMIN))) -> dict:
     """Return the append-only lifecycle events for one Agent Run."""
     assert_application_access(application_id, user)
     run = get_agent_run(run_id)
@@ -110,6 +115,8 @@ def resume_agent_run(application_id: str, run_id: str, background_tasks: Backgro
     application = get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="授信申请不存在")
+    if not can_access_application(application, user):
+        raise HTTPException(status_code=403, detail="当前组织无权访问该授信申请")
     try:
         run = get_agent_run(run_id)
         if not run or run["application_id"] != application_id:
@@ -124,7 +131,7 @@ def resume_agent_run(application_id: str, run_id: str, background_tasks: Backgro
 
 
 @router.post("/{application_id}/agent-question")
-def agent_question(application_id: str, body: AgentQuestionRequest, user: User = Depends(current_user)) -> dict:
+def agent_question(application_id: str, body: AgentQuestionRequest, user: User = Depends(require_roles(Role.RISK_MANAGER, Role.APPROVER, Role.COMPLIANCE_ADMIN))) -> dict:
     assert_application_access(application_id, user)
     application = get_application(application_id)
     assert application is not None
@@ -139,6 +146,8 @@ def submit(application_id: str, body: ApprovalSubmissionRequest | None = None, u
     application = get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="授信申请不存在")
+    if not can_access_application(application, user):
+        raise HTTPException(status_code=403, detail="当前组织无权访问该授信申请")
     try:
         task = submit_for_approval(application, user, body.override_reason if body else None)
     except SubmissionPolicyError as error:

@@ -16,6 +16,7 @@ class ApplicationStatus(StrEnum):
     DRAFT = "draft"
     PRE_REVIEWED = "pre_reviewed"
     PENDING_APPROVAL = "pending_approval"
+    RETURNED = "returned"
     APPROVED = "approved"
     REJECTED = "rejected"
 
@@ -57,3 +58,6 @@ class AuditEvent:
     resource_id: str
     detail: dict
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    id: int | None = None
+    prev_hash: str = ""
+    event_hash: str = ""

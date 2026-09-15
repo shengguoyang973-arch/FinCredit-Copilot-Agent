@@ -2,18 +2,25 @@ from fastapi import Header, HTTPException, status
 
 from app.config import get_settings
 from app.domain import Role, User
-from app.identity import DemoHeaderIdentityProvider, OIDCIdentityProvider
+from app.identity import identity_provider_for
+from app.repository import USERS
 
 
 def current_user(x_user_id: str | None = Header(None, alias="X-User-Id"), authorization: str | None = Header(None)) -> User:
     settings = get_settings()
-    provider = OIDCIdentityProvider() if settings.identity_provider == "oidc" else DemoHeaderIdentityProvider()
-    token = authorization.removeprefix("Bearer ").strip() if authorization else None
     try:
+        provider = identity_provider_for(settings.identity_provider)
+        if settings.identity_provider == "oidc":
+            if not authorization:
+                raise LookupError("缺少 Authorization Bearer Token")
+            if not authorization.startswith("Bearer ") or not authorization.removeprefix("Bearer ").strip():
+                raise LookupError("Authorization 必须使用 Bearer Token")
+        token = authorization.removeprefix("Bearer ").strip() if authorization else None
         return provider.authenticate(token=token, user_id=x_user_id)
-    except (LookupError, RuntimeError) as error:
-        code = status.HTTP_503_SERVICE_UNAVAILABLE if settings.identity_provider == "oidc" else status.HTTP_401_UNAUTHORIZED
-        raise HTTPException(status_code=code, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
 
 def require_roles(*allowed: Role):
@@ -30,7 +37,12 @@ def can_access_application(application, user: User) -> bool:
         return True
     if Role.ACCOUNT_MANAGER in user.roles:
         return application.created_by == user.id
-    return True
+    if not user.roles.intersection({Role.RISK_MANAGER, Role.APPROVER}):
+        return False
+    creator = USERS.get(application.created_by)
+    if not creator:
+        return False
+    return creator.organization_id == user.organization_id
 
 
 def filter_customer_fields(customer: dict | None, user: User) -> dict | None:

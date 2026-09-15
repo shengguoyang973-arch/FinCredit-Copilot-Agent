@@ -15,15 +15,15 @@ from app.domain import ApplicationStatus, LoanApplication, PolicyClause, Role, U
 from app.knowledge_store import list_policies
 from app.observability import current_request_id, log_event
 from app.rag import retrieve_policy_context
-from app.repository import audit, get_customer, update_status
+from app.repository import audit, get_customer
 from app.risk_rules import POLICY_EVIDENCE_IDS, PreReviewRuleDecision, evaluate_pre_review_rules
 from app.workflow_store import (
-    complete_agent_run,
     create_agent_run,
     create_approval_task,
+    finalize_agent_run,
+    finalize_pre_review,
     get_report,
     get_agent_run,
-    save_report,
     transition_agent_run,
     update_agent_run_snapshot,
 )
@@ -36,6 +36,12 @@ def search_policies(query: str) -> list[PolicyClause]:
 def pre_review(application: LoanApplication, actor: User, existing_run_id: str | None = None) -> dict:
     if Role.RISK_MANAGER not in actor.roles:
         raise PermissionError("只有风险经理可以发起预审")
+    if application.status not in {
+        ApplicationStatus.DRAFT,
+        ApplicationStatus.PRE_REVIEWED,
+        ApplicationStatus.RETURNED,
+    }:
+        raise ValueError("当前申请状态不允许生成或覆盖预审报告")
     agent_provider = get_agent_provider("generate_brief", application.id)
     run = get_agent_run(existing_run_id) if existing_run_id else create_agent_run(application.id, agent_provider.name, "generate_brief", actor.id, {"task": "generate_brief", "request_id": current_request_id()})
     if not run or run["application_id"] != application.id:
@@ -77,11 +83,15 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
             "rag": agent_context.retrieval_trace,
             "agent_brief": agent_brief,
         }
-        # Do not expose PRE_REVIEWED until the governed report is durable.
-        save_report(application.id, report, actor.id)
-        transition_agent_run(run_id, AgentRunState.COMPLETED)
-        agent_run = complete_agent_run(run_id, snapshot, agent_brief)
-        update_status(application, ApplicationStatus.PRE_REVIEWED)
+        agent_run = finalize_pre_review(
+            application.id,
+            run_id,
+            report,
+            actor.id,
+            snapshot,
+            agent_brief,
+        )
+        application.status = ApplicationStatus.PRE_REVIEWED
     except Exception as error:
         try:
             transition_agent_run(run_id, AgentRunState.FAILED, error_code=type(error).__name__)
@@ -124,8 +134,7 @@ def answer_business_question(application: LoanApplication, actor: User, question
         if answer.get("fallback"):
             transition_agent_run(run_id, AgentRunState.FALLBACK, reason=answer.get("fallback_reason"))
             transition_agent_run(run_id, AgentRunState.VALIDATING, event_type="fallback_output_validated")
-        transition_agent_run(run_id, AgentRunState.COMPLETED)
-        agent_run = complete_agent_run(run_id, snapshot, answer)
+        agent_run = finalize_agent_run(run_id, snapshot, answer)
     except Exception as error:
         try:
             transition_agent_run(run_id, AgentRunState.FAILED, error_code=type(error).__name__)
@@ -167,8 +176,8 @@ def submit_for_approval(application: LoanApplication, actor: User, override_reas
     policy_decision = evaluate_submission_policy(report, override_reason)
     if not policy_decision.allowed:
         raise SubmissionPolicyError(policy_decision)
-    update_status(application, ApplicationStatus.PENDING_APPROVAL)
     task = create_approval_task(application.id, actor.id)
+    application.status = ApplicationStatus.PENDING_APPROVAL
     audit("approval_submitted", actor.id, application.id, submission_policy=policy_decision.to_dict())
     return task | {"submission_policy": policy_decision.to_dict()}
 

@@ -8,8 +8,9 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     service_name: str = "fincredit-copilot"
+    deployment_environment: str = "development"
     identity_provider: str = "demo-header"
     agent_provider: str = "deterministic-local"
     openai_model: str = "gpt-4.1-mini"
@@ -36,6 +37,7 @@ def get_settings() -> Settings:
     data_dir = Path(os.getenv("FINCREDIT_DATA_DIR", str(Settings.data_dir)))
     max_document_bytes = int(os.getenv("FINCREDIT_MAX_DOCUMENT_BYTES", str(Settings.max_document_bytes)))
     return Settings(
+        deployment_environment=os.getenv("FINCREDIT_ENVIRONMENT", Settings.deployment_environment).strip().lower(),
         identity_provider=os.getenv("FINCREDIT_IDENTITY_PROVIDER", Settings.identity_provider).strip().lower(),
         agent_provider=os.getenv("FINCREDIT_AGENT_PROVIDER", Settings.agent_provider).strip().lower(),
         openai_model=os.getenv("OPENAI_MODEL", Settings.openai_model).strip(),
@@ -59,6 +61,12 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
     """Return non-secret configuration errors for startup/readiness checks."""
     settings = settings or get_settings()
     errors: list[str] = []
+    if settings.deployment_environment not in {"development", "test", "production"}:
+        errors.append("FINCREDIT_ENVIRONMENT 必须是 development、test 或 production")
+    if settings.identity_provider not in {"demo-header", "oidc"}:
+        errors.append("FINCREDIT_IDENTITY_PROVIDER 必须是 demo-header 或 oidc")
+    if settings.deployment_environment == "production" and settings.identity_provider == "demo-header":
+        errors.append("生产环境禁止使用 demo-header 身份提供方")
     if settings.openai_timeout_seconds <= 0:
         errors.append("OPENAI_TIMEOUT_SECONDS 必须大于 0")
     if settings.agent_max_retries < 0:

@@ -31,7 +31,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.2.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.3.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -65,6 +65,7 @@ def test_workbench_escapes_dynamic_frontend_content() -> None:
     assert "loadingMarkup" in script
     assert "/v1/observability/agent-metrics" in script
     assert "renderMetrics" in script
+    assert 'pending_approval: "待审批"' in script
 
 
 def test_workbench_interaction_styles_are_available() -> None:
@@ -109,6 +110,24 @@ def test_risk_manager_can_pre_review() -> None:
 def test_account_manager_cannot_pre_review() -> None:
     response = client.post("/v1/applications/APP001/pre-review", headers={"X-User-Id": "sales_001"})
     assert response.status_code == 403
+
+
+def test_account_manager_cannot_access_governed_agent_runtime() -> None:
+    question = client.post(
+        "/v1/applications/APP001/agent-question",
+        headers={"X-User-Id": "sales_001"},
+        json={"question": "请说明当前风险状态。"},
+    )
+    runs = client.get("/v1/applications/APP001/agent-runs", headers={"X-User-Id": "sales_001"})
+    assert question.status_code == 403
+    assert runs.status_code == 403
+
+
+def test_account_manager_report_snapshot_applies_field_policy() -> None:
+    assert client.post("/v1/applications/APP001/pre-review", headers={"X-User-Id": "rm_001"}).status_code == 200
+    report = client.get("/v1/applications/APP001/pre-review-report", headers={"X-User-Id": "sales_001"})
+    assert report.status_code == 200
+    assert "overdue_days_12m" not in report.json()["customer_snapshot"]
 
 
 def test_agent_runs_are_persisted_and_queryable() -> None:
@@ -208,6 +227,20 @@ def test_unknown_user_cannot_view_agent_runs() -> None:
     assert response.status_code == 401
 
 
+def test_unknown_identity_provider_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("FINCREDIT_IDENTITY_PROVIDER", "unexpected-provider")
+    response = client.get("/v1/applications/APP001", headers={"X-User-Id": "rm_001"})
+    assert response.status_code == 503
+    assert "未配置的身份提供方" in response.json()["detail"]
+
+
+def test_oidc_requires_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv("FINCREDIT_IDENTITY_PROVIDER", "oidc")
+    response = client.get("/v1/applications/APP001")
+    assert response.status_code == 401
+    assert "Bearer Token" in response.json()["detail"]
+
+
 def test_policy_search_returns_versioned_evidence() -> None:
     response = client.post("/v1/knowledge/search", headers={"X-User-Id": "rm_001"}, json={"query": "额度 流动资金"})
     assert response.status_code == 200
@@ -247,6 +280,96 @@ def test_approver_can_make_human_decision_after_submission() -> None:
     assert decision.json()["application_status"] == "approved"
 
 
+def test_approval_separation_of_duties_is_enforced(monkeypatch) -> None:
+    from app.domain import Role, User
+    from app.repository import USERS
+
+    monkeypatch.setitem(USERS, "dual_control_001", User(
+        "dual_control_001",
+        "双重角色测试用户",
+        {Role.RISK_MANAGER, Role.APPROVER},
+        "branch-shanghai",
+    ))
+    upload_required_materials()
+    headers = {"X-User-Id": "dual_control_001"}
+    assert client.post("/v1/applications/APP001/pre-review", headers=headers).status_code == 200
+    submission = client.post("/v1/applications/APP001/submit", headers=headers)
+    assert submission.status_code == 200
+    task_id = submission.json()["approval_task"]["id"]
+    decision = client.post(
+        f"/v1/approval-tasks/{task_id}/decision",
+        headers=headers,
+        json={"decision": "approved", "comment": "尝试由同一人员完成提交与审批。"},
+    )
+    assert decision.status_code == 409
+    assert "职责分离" in decision.json()["detail"]
+
+
+def test_return_and_resubmit_preserve_approval_history() -> None:
+    headers = {"X-User-Id": "rm_001"}
+    upload_required_materials()
+    assert client.post("/v1/applications/APP001/pre-review", headers=headers).status_code == 200
+    first = client.post("/v1/applications/APP001/submit", headers=headers).json()["approval_task"]
+    returned = client.post(
+        f"/v1/approval-tasks/{first['id']}/decision",
+        headers={"X-User-Id": "approver_001"},
+        json={"decision": "returned", "comment": "请补充人工尽调记录后重新提交。"},
+    )
+    assert returned.status_code == 200
+    premature = client.post("/v1/applications/APP001/submit", headers=headers)
+    assert premature.status_code == 409
+    assert client.post("/v1/applications/APP001/pre-review", headers=headers).status_code == 200
+    second = client.post("/v1/applications/APP001/submit", headers=headers).json()["approval_task"]
+    assert second["id"] != first["id"]
+    old_task = client.get(
+        f"/v1/approval-tasks/{first['id']}", headers={"X-User-Id": "rm_001"}
+    )
+    assert old_task.status_code == 200
+    assert old_task.json()["status"] == "returned"
+
+
+def test_pending_application_report_cannot_be_overwritten() -> None:
+    headers = {"X-User-Id": "rm_001"}
+    upload_required_materials()
+    assert client.post("/v1/applications/APP001/pre-review", headers=headers).status_code == 200
+    assert client.post("/v1/applications/APP001/submit", headers=headers).status_code == 200
+    second_review = client.post("/v1/applications/APP001/pre-review", headers=headers)
+    assert second_review.status_code == 409
+
+
+def test_changed_report_hash_blocks_approval_decision() -> None:
+    from app import database
+
+    headers = {"X-User-Id": "rm_001"}
+    upload_required_materials()
+    assert client.post("/v1/applications/APP001/pre-review", headers=headers).status_code == 200
+    task_id = client.post("/v1/applications/APP001/submit", headers=headers).json()["approval_task"]["id"]
+    with database.connection() as connection:
+        connection.execute(
+            "UPDATE review_reports SET report_json = report_json || ? WHERE application_id = ?",
+            (" ", "APP001"),
+        )
+    decision = client.post(
+        f"/v1/approval-tasks/{task_id}/decision",
+        headers={"X-User-Id": "approver_001"},
+        json={"decision": "approved", "comment": "尝试依据已变化的报告完成审批。"},
+    )
+    assert decision.status_code == 409
+    assert "预审报告已变化" in decision.json()["detail"]
+
+
+def test_duplicate_approval_decision_is_rejected_atomically() -> None:
+    headers = {"X-User-Id": "rm_001"}
+    upload_required_materials()
+    assert client.post("/v1/applications/APP001/pre-review", headers=headers).status_code == 200
+    task_id = client.post("/v1/applications/APP001/submit", headers=headers).json()["approval_task"]["id"]
+    payload = {"decision": "approved", "comment": "完成授权范围内的人工复核。"}
+    first = client.post(f"/v1/approval-tasks/{task_id}/decision", headers={"X-User-Id": "approver_001"}, json=payload)
+    second = client.post(f"/v1/approval-tasks/{task_id}/decision", headers={"X-User-Id": "approver_001"}, json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
 def test_risk_manager_cannot_decide_approval_task() -> None:
     response = client.post("/v1/approval-tasks/APR-APP001/decision", headers={"X-User-Id": "rm_001"},
                            json={"decision": "approved", "comment": "无权审批。"})
@@ -270,6 +393,25 @@ def test_audit_log_is_persisted_and_restricted_to_compliance() -> None:
     assert denied.status_code == 403
     assert allowed.status_code == 200
     assert any(event["action"] == "application_viewed" for event in allowed.json())
+    assert all(len(event["event_hash"]) == 64 for event in allowed.json())
+
+
+def test_audit_hash_chain_detects_tampering() -> None:
+    from app import database
+
+    client.get("/v1/applications/APP001", headers={"X-User-Id": "rm_001"})
+    integrity = client.get("/v1/audit-events/integrity", headers={"X-User-Id": "compliance_001"})
+    assert integrity.status_code == 200
+    assert integrity.json()["valid"] is True
+    with database.connection() as connection:
+        connection.execute(
+            "UPDATE audit_events SET detail_json = ? WHERE id = (SELECT MIN(id) FROM audit_events)",
+            ('{"tampered":true}',),
+        )
+    tampered = client.get("/v1/audit-events/integrity", headers={"X-User-Id": "compliance_001"})
+    assert tampered.status_code == 200
+    assert tampered.json()["valid"] is False
+    assert tampered.json()["first_invalid_event_id"] is not None
 
 
 def test_material_upload_extracts_fields_and_completeness() -> None:

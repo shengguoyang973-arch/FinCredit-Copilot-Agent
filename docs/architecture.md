@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.2 uses LangChain for model composition, structured output, and retrieval contracts while retaining deterministic credit rules and a mandatory human approval boundary.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.3 combines LangChain model/RAG composition with fail-closed identity selection, transactional approval state changes, separation of duties, and a tamper-evident audit chain.
 
 ## Module Layout
 
@@ -12,7 +12,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/migrations/`: Migration registry for local schema creation and future database evolution.
 - `app/bootstrap.py`: Startup initialization for local stores.
 - `app/domain.py`: Domain entities and enums.
-- `app/security.py`: Demo authentication and role checks.
+- `app/security.py`: Fail-closed identity selection, role checks, and organization-scoped application access.
 - `app/services.py`: Business workflow orchestration for policy search, pre-review, Agent brief generation, real-time Agent Q&A, and approval submission.
 - `app/risk_rules.py`: Pre-review rule engine for admission, amount, overdue, leverage, and material completeness findings.
 - `app/approval_policy.py`: Submission guardrail engine for missing materials, blocking rules, high-risk findings, and override reasons.
@@ -25,7 +25,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/agent_tools.py`: Read-only Agent tool allowlist and tool execution trace for application, material, policy, and approval status lookups.
 - `app/observability.py`: Request ID propagation, JSON logging, and structured operational events.
 - `app/metrics.py`: Agent run metric aggregation for latency, fallback, provider, task, and tool usage.
-- `app/*_store.py`: Local repository adapters for policies, workflow state, applications, audit events, and documents. Stores own queries and seed data, while migrations own schema changes.
+- `app/*_store.py`: Local repository adapters for policies, transactional workflow state, applications, hash-chained audit events, and documents. Stores own queries and seed data, while migrations own schema changes.
 - `app/static/`: Browser workbench, including pre-review, Agent Q&A, approval, material archive, and Agent observability panels.
 - `scripts/quality_gate.py`: Scenario-based regression gate for financial Agent behavior.
 - `tests/`: API and behavior regression tests.
@@ -40,10 +40,12 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 6. The tool allowlist supplies minimized, read-only business context without document body previews.
 7. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
 8. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
-9. Workflow storage persists the report, Agent run, and RAG trace.
+9. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`.
 10. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
 11. The approval policy engine evaluates whether the application can be submitted.
-12. Human approvers make the final decision through the approval task endpoint.
+12. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
+13. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions; returned applications must be re-reviewed before resubmission.
+14. Audit writes extend a SHA-256 chain that compliance users can verify through the integrity endpoint.
 
 ## Current Guardrails
 
@@ -63,16 +65,22 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Submission is blocked when required materials are missing or a blocking rule is triggered.
 - High-risk submissions require an explicit manual override reason.
 - Approval decisions require the approver role and a human comment.
-- The quality gate checks rule hits, authorization failures, missing-material blocks, override handling, and Agent output boundaries.
+- An approver cannot be the application creator, report reviewer, or approval submitter.
+- Every resubmission creates a new task; old returned or decided tasks remain queryable.
+- Pending approval tasks lock the pre-review report hash and reject decisions against changed evidence.
+- Unknown identity providers fail closed, and `/ready` rejects demo-header authentication in production.
+- Application access is scoped to the creator's organization except for compliance administrators.
+- Audit events include previous/current SHA-256 hashes, with a compliance-only integrity endpoint.
+- The quality gate checks rule hits, authorization failures, missing-material blocks, override handling, Agent output boundaries, separation of duties, and audit integrity.
 - The release gate checks offline Agent quality thresholds before a build is considered releasable.
 - `/ready` checks non-secret runtime configuration and database connectivity for container orchestration.
 
 ## Production Extension Points
 
-- Replace demo header auth with SSO/OIDC and field-level authorization.
+- Implement enterprise JWKS verification behind the existing strict OIDC seam and persist tenant identifiers on applications.
 - Replace the SQLite adapter with PostgreSQL-backed repositories and promote `app/migrations/` to Alembic-managed migrations.
 - Harden the OpenAI Provider with stricter structured output validation, DLP, tool-call allowlists, retry policy, cost tracking, and model-output eval scoring.
 - Expand `scripts/quality_gate.py` into CI/CD quality gates with larger labeled cases and model-output scoring.
 - Export observability data to OpenTelemetry, Prometheus, or an enterprise SIEM/log platform.
-- Send audit and Agent run records to an immutable log platform.
+- Replicate the local tamper-evident audit chain and Agent runs to an immutable log platform.
 - Connect document storage to object storage, OCR, malware scanning, and retention policies.

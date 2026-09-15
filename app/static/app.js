@@ -4,7 +4,7 @@ const userSelect = document.querySelector("#user-id");
 const STATUS_LABELS = {
   draft: "草稿",
   pre_reviewed: "已预审",
-  submitted: "已提交",
+  pending_approval: "待审批",
   approved: "已批准",
   rejected: "已拒绝",
   returned: "已退回",

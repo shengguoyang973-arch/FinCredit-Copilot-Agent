@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from app.domain import Role, User
-from app.state_store import audit, get_application, get_customer, update_status
+from app.state_store import audit, get_application, get_customer
 
-__all__ = ["USERS", "audit", "get_application", "get_customer", "update_status"]
+__all__ = ["USERS", "audit", "get_application", "get_customer"]
 
 USERS = {
     "sales_001": User("sales_001", "王客户经理", {Role.ACCOUNT_MANAGER}, "branch-shanghai", {"region": "华东"}),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from uuid import uuid4
@@ -7,6 +8,7 @@ from datetime import datetime, timezone
 
 from app.database import connection as database_connection
 from app.agent_runtime import AgentRun, AgentRunEvent, AgentRunState
+from app.domain import ApplicationStatus
 
 
 def _connection() -> sqlite3.Connection:
@@ -15,15 +17,6 @@ def _connection() -> sqlite3.Connection:
 
 def initialize() -> None:
     return None
-
-
-def save_report(application_id: str, report: dict, created_by: str) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    with _connection() as connection:
-        connection.execute("""INSERT INTO review_reports(application_id, report_json, created_by, created_at)
-            VALUES (?, ?, ?, ?) ON CONFLICT(application_id) DO UPDATE SET report_json=excluded.report_json,
-            created_by=excluded.created_by, created_at=excluded.created_at""",
-            (application_id, json.dumps(report, ensure_ascii=False), created_by, now))
 
 
 def get_report(application_id: str) -> dict | None:
@@ -100,20 +93,23 @@ def update_agent_run_snapshot(run_id: str, input_snapshot: dict) -> dict:
 
 def transition_agent_run(run_id: str, next_state: AgentRunState, *, event_type: str | None = None, **metadata: object) -> dict:
     """Validate and persist one lifecycle transition atomically."""
-    run = get_agent_run(run_id)
-    if not run:
-        raise KeyError("Agent Run 不存在")
-    runtime_run = AgentRun(run_id, run["application_id"], run["task"], run["created_by"], AgentRunState(run["state"]))
-    event = runtime_run.transition(next_state, event_type=event_type, **metadata)
     now = datetime.now(timezone.utc).isoformat()
     with _connection() as connection:
-        connection.execute("UPDATE agent_runs SET state = ?, updated_at = ? WHERE id = ?", (next_state.value, now, run_id))
-        connection.execute("""INSERT INTO agent_run_events(
-            run_id, event_type, from_state, to_state, metadata_json, occurred_at
-        ) VALUES (?, ?, ?, ?, ?, ?)""", (
-            event.run_id, event.event_type, event.from_state.value, event.to_state.value,
-            json.dumps(event.metadata, ensure_ascii=False), event.occurred_at,
-        ))
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            raise KeyError("Agent Run 不存在")
+        runtime_run = AgentRun(
+            run_id, row["application_id"], row["task"], row["created_by"], AgentRunState(row["state"])
+        )
+        event = runtime_run.transition(next_state, event_type=event_type, **metadata)
+        updated = connection.execute(
+            "UPDATE agent_runs SET state = ?, updated_at = ? WHERE id = ? AND state = ?",
+            (next_state.value, now, run_id, row["state"]),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Agent Run 状态已被并发修改")
+        _insert_agent_run_event(connection, event)
     return get_agent_run(run_id)  # type: ignore[return-value]
 
 
@@ -123,31 +119,123 @@ def resume_agent_run(run_id: str, actor_id: str) -> dict:
     The persisted snapshot is intentionally kept so a worker can rebuild the
     context deterministically before invoking the model again.
     """
-    run = get_agent_run(run_id)
-    if not run:
-        raise KeyError("Agent Run 不存在")
-    runtime_run = AgentRun(run_id, run["application_id"], run["task"], run["created_by"], AgentRunState(run["state"]))
-    event = runtime_run.resume(resumed_by=actor_id)
     now = datetime.now(timezone.utc).isoformat()
     with _connection() as connection:
-        connection.execute("UPDATE agent_runs SET state = ?, updated_at = ? WHERE id = ?", (runtime_run.state.value, now, run_id))
-        connection.execute("""INSERT INTO agent_run_events(
-            run_id, event_type, from_state, to_state, metadata_json, occurred_at
-        ) VALUES (?, ?, ?, ?, ?, ?)""", (
-            event.run_id, event.event_type, event.from_state.value, event.to_state.value,
-            json.dumps(event.metadata, ensure_ascii=False), event.occurred_at,
-        ))
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            raise KeyError("Agent Run 不存在")
+        runtime_run = AgentRun(
+            run_id, row["application_id"], row["task"], row["created_by"], AgentRunState(row["state"])
+        )
+        event = runtime_run.resume(resumed_by=actor_id)
+        updated = connection.execute(
+            "UPDATE agent_runs SET state = ?, updated_at = ? WHERE id = ? AND state = ?",
+            (runtime_run.state.value, now, run_id, row["state"]),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Agent Run 状态已被并发修改")
+        _insert_agent_run_event(connection, event)
     return get_agent_run(run_id)  # type: ignore[return-value]
 
 
-def complete_agent_run(run_id: str, input_snapshot: dict, output: dict) -> dict:
-    """Persist the final structured output after VALIDATING/COMPLETED."""
+def finalize_agent_run(run_id: str, input_snapshot: dict, output: dict) -> dict:
+    """Atomically persist output, COMPLETED state, and its lifecycle event."""
     now = datetime.now(timezone.utc).isoformat()
     with _connection() as connection:
-        connection.execute(
-            "UPDATE agent_runs SET input_snapshot_json = ?, output_json = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(input_snapshot, ensure_ascii=False), json.dumps(output, ensure_ascii=False), now, run_id),
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            raise KeyError("Agent Run 不存在")
+        runtime_run = AgentRun(
+            run_id,
+            row["application_id"],
+            row["task"],
+            row["created_by"],
+            AgentRunState(row["state"]),
         )
+        event = runtime_run.transition(AgentRunState.COMPLETED)
+        updated = connection.execute(
+            """UPDATE agent_runs SET state = ?, input_snapshot_json = ?, output_json = ?, updated_at = ?
+               WHERE id = ? AND state = ?""",
+            (
+                AgentRunState.COMPLETED.value,
+                json.dumps(input_snapshot, ensure_ascii=False),
+                json.dumps(output, ensure_ascii=False),
+                now,
+                run_id,
+                row["state"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("Agent Run 状态已被并发修改")
+        _insert_agent_run_event(connection, event)
+    return get_agent_run(run_id)  # type: ignore[return-value]
+
+
+def finalize_pre_review(
+    application_id: str,
+    run_id: str,
+    report: dict,
+    created_by: str,
+    input_snapshot: dict,
+    output: dict,
+) -> dict:
+    """Commit report, Agent Run completion, and application status together."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        application = connection.execute(
+            "SELECT status FROM loan_applications WHERE id = ?", (application_id,)
+        ).fetchone()
+        if not application:
+            raise KeyError("授信申请不存在")
+        allowed_statuses = {
+            ApplicationStatus.DRAFT.value,
+            ApplicationStatus.PRE_REVIEWED.value,
+            ApplicationStatus.RETURNED.value,
+        }
+        if application["status"] not in allowed_statuses:
+            raise ValueError("当前申请状态不允许重新生成预审报告")
+        row = connection.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row or row["application_id"] != application_id:
+            raise KeyError("Agent Run 不存在或不属于当前申请")
+        runtime_run = AgentRun(
+            run_id,
+            application_id,
+            row["task"],
+            row["created_by"],
+            AgentRunState(row["state"]),
+        )
+        event = runtime_run.transition(AgentRunState.COMPLETED)
+        connection.execute(
+            """INSERT INTO review_reports(application_id, report_json, created_by, created_at)
+               VALUES (?, ?, ?, ?) ON CONFLICT(application_id) DO UPDATE SET
+               report_json=excluded.report_json, created_by=excluded.created_by, created_at=excluded.created_at""",
+            (application_id, json.dumps(report, ensure_ascii=False), created_by, now),
+        )
+        updated_run = connection.execute(
+            """UPDATE agent_runs SET state = ?, input_snapshot_json = ?, output_json = ?, updated_at = ?
+               WHERE id = ? AND state = ?""",
+            (
+                AgentRunState.COMPLETED.value,
+                json.dumps(input_snapshot, ensure_ascii=False),
+                json.dumps(output, ensure_ascii=False),
+                now,
+                run_id,
+                row["state"],
+            ),
+        )
+        if updated_run.rowcount != 1:
+            raise ValueError("Agent Run 状态已被并发修改")
+        _insert_agent_run_event(connection, event)
+        placeholders = ",".join("?" for _ in allowed_statuses)
+        updated_application = connection.execute(
+            f"UPDATE loan_applications SET status = ? WHERE id = ? AND status IN ({placeholders})",
+            (ApplicationStatus.PRE_REVIEWED.value, application_id, *sorted(allowed_statuses)),
+        )
+        if updated_application.rowcount != 1:
+            raise ValueError("申请状态已被并发修改")
     return get_agent_run(run_id)  # type: ignore[return-value]
 
 
@@ -202,12 +290,40 @@ def _to_agent_run(row: sqlite3.Row) -> dict:
 
 
 def create_approval_task(application_id: str, submitted_by: str) -> dict:
-    task_id, now = f"APR-{application_id}", datetime.now(timezone.utc).isoformat()
+    task_id, now = f"APR-{application_id}-{uuid4().hex[:8]}", datetime.now(timezone.utc).isoformat()
     with _connection() as connection:
-        connection.execute("""INSERT INTO approval_tasks(id, application_id, status, submitted_by, submitted_at)
-            VALUES (?, ?, 'pending', ?, ?) ON CONFLICT(id) DO UPDATE SET status='pending',
-            submitted_by=excluded.submitted_by, submitted_at=excluded.submitted_at, decided_by=NULL,
-            decided_at=NULL, decision_comment=NULL""", (task_id, application_id, submitted_by, now))
+        connection.execute("BEGIN IMMEDIATE")
+        application = connection.execute(
+            "SELECT status FROM loan_applications WHERE id = ?", (application_id,)
+        ).fetchone()
+        if not application:
+            raise KeyError("授信申请不存在")
+        if application["status"] != ApplicationStatus.PRE_REVIEWED.value:
+            raise ValueError("申请状态已变化，不能重复提交审批")
+        report = connection.execute(
+            "SELECT report_json, created_by FROM review_reports WHERE application_id = ?", (application_id,)
+        ).fetchone()
+        if not report:
+            raise ValueError("提交审批前必须先生成预审报告")
+        connection.execute(
+            """INSERT INTO approval_tasks(
+                id, application_id, status, submitted_by, submitted_at, reviewed_by, report_hash
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?)""",
+            (
+                task_id,
+                application_id,
+                submitted_by,
+                now,
+                report["created_by"],
+                _report_hash(report["report_json"]),
+            ),
+        )
+        updated = connection.execute(
+            "UPDATE loan_applications SET status = ? WHERE id = ? AND status = ?",
+            (ApplicationStatus.PENDING_APPROVAL.value, application_id, ApplicationStatus.PRE_REVIEWED.value),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("申请状态已被并发修改")
     return get_approval_task(task_id)  # type: ignore[return-value]
 
 
@@ -217,13 +333,72 @@ def get_approval_task(task_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def decide_approval_task(task_id: str, decision: str, approver_id: str, comment: str) -> dict:
-    task = get_approval_task(task_id)
-    if not task:
-        raise KeyError("审批任务不存在")
-    if task["status"] != "pending":
-        raise ValueError("审批任务已处理，不能重复决策")
+def get_latest_approval_task(application_id: str) -> dict | None:
     with _connection() as connection:
-        connection.execute("UPDATE approval_tasks SET status=?, decided_by=?, decided_at=?, decision_comment=? WHERE id=?",
-            (decision, approver_id, datetime.now(timezone.utc).isoformat(), comment, task_id))
+        row = connection.execute(
+            "SELECT * FROM approval_tasks WHERE application_id = ? ORDER BY submitted_at DESC, id DESC LIMIT 1",
+            (application_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def decide_approval_task(task_id: str, decision: str, approver_id: str, comment: str) -> dict:
+    target_status = {
+        "approved": ApplicationStatus.APPROVED.value,
+        "rejected": ApplicationStatus.REJECTED.value,
+        "returned": ApplicationStatus.RETURNED.value,
+    }[decision]
+    with _connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        task = connection.execute("SELECT * FROM approval_tasks WHERE id = ?", (task_id,)).fetchone()
+        if not task:
+            raise KeyError("审批任务不存在")
+        if task["status"] != "pending":
+            raise ValueError("审批任务已处理，不能重复决策")
+        application = connection.execute(
+            "SELECT status, created_by FROM loan_applications WHERE id = ?", (task["application_id"],)
+        ).fetchone()
+        if not application or application["status"] != ApplicationStatus.PENDING_APPROVAL.value:
+            raise ValueError("申请不处于待审批状态")
+        conflicting_actors = {task["submitted_by"], task["reviewed_by"], application["created_by"]}
+        if approver_id in conflicting_actors:
+            raise ValueError("职责分离校验失败：申请创建、预审/提交与最终审批必须由不同人员完成")
+        report = connection.execute(
+            "SELECT report_json FROM review_reports WHERE application_id = ?", (task["application_id"],)
+        ).fetchone()
+        if not report or _report_hash(report["report_json"]) != task["report_hash"]:
+            raise ValueError("审批依据的预审报告已变化，请退回并重新提交")
+        updated_task = connection.execute(
+            """UPDATE approval_tasks SET status=?, decided_by=?, decided_at=?, decision_comment=?
+               WHERE id=? AND status='pending'""",
+            (decision, approver_id, datetime.now(timezone.utc).isoformat(), comment, task_id),
+        )
+        if updated_task.rowcount != 1:
+            raise ValueError("审批任务已被并发处理")
+        updated_application = connection.execute(
+            "UPDATE loan_applications SET status = ? WHERE id = ? AND status = ?",
+            (target_status, task["application_id"], ApplicationStatus.PENDING_APPROVAL.value),
+        )
+        if updated_application.rowcount != 1:
+            raise ValueError("申请状态已被并发修改")
     return get_approval_task(task_id)  # type: ignore[return-value]
+
+
+def _insert_agent_run_event(connection: sqlite3.Connection, event: AgentRunEvent) -> None:
+    connection.execute(
+        """INSERT INTO agent_run_events(
+            run_id, event_type, from_state, to_state, metadata_json, occurred_at
+        ) VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            event.run_id,
+            event.event_type,
+            event.from_state.value,
+            event.to_state.value,
+            json.dumps(event.metadata, ensure_ascii=False),
+            event.occurred_at,
+        ),
+    )
+
+
+def _report_hash(report_json: str) -> str:
+    return hashlib.sha256(report_json.encode("utf-8")).hexdigest()

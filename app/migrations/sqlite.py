@@ -50,6 +50,14 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         )""",
         "CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_id ON agent_run_events(run_id, id)",
     )),
+    ("0003_governed_workflow", (
+        "ALTER TABLE approval_tasks ADD COLUMN reviewed_by TEXT",
+        "ALTER TABLE approval_tasks ADD COLUMN report_hash TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE audit_events ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE audit_events ADD COLUMN event_hash TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS idx_approval_tasks_application ON approval_tasks(application_id, submitted_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_hash ON audit_events(event_hash)",
+    )),
 )
 
 
