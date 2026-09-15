@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -26,6 +27,21 @@ class Settings:
     rag_vector_weight: float = 0.15
     rag_min_vector_score: float = 0.0
     rag_chunk_size: int = 180
+    embedding_provider: str = "hash-local"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 256
+    vector_store_backend: str = "memory"
+    pgvector_connection: str = ""
+    pgvector_collection: str = "fincredit_policy_chunks"
+    oidc_jwks_url: str = ""
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_algorithms: tuple[str, ...] = ("RS256",)
+    oidc_roles_claim: str = "roles"
+    oidc_org_claim: str = "organization_id"
+    oidc_name_claim: str = "name"
+    oidc_role_mappings: tuple[tuple[str, str], ...] = ()
+    oidc_leeway_seconds: int = 30
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
 
     @property
@@ -53,6 +69,28 @@ def get_settings() -> Settings:
         rag_vector_weight=float(os.getenv("FINCREDIT_RAG_VECTOR_WEIGHT", str(Settings.rag_vector_weight))),
         rag_min_vector_score=float(os.getenv("FINCREDIT_RAG_MIN_VECTOR_SCORE", str(Settings.rag_min_vector_score))),
         rag_chunk_size=int(os.getenv("FINCREDIT_RAG_CHUNK_SIZE", str(Settings.rag_chunk_size))),
+        embedding_provider=os.getenv("FINCREDIT_EMBEDDING_PROVIDER", Settings.embedding_provider).strip().lower(),
+        embedding_model=os.getenv("FINCREDIT_EMBEDDING_MODEL", Settings.embedding_model).strip(),
+        embedding_dimensions=int(os.getenv("FINCREDIT_EMBEDDING_DIMENSIONS", str(Settings.embedding_dimensions))),
+        vector_store_backend=os.getenv("FINCREDIT_VECTOR_STORE_BACKEND", Settings.vector_store_backend).strip().lower(),
+        pgvector_connection=os.getenv("FINCREDIT_PGVECTOR_CONNECTION", Settings.pgvector_connection).strip(),
+        pgvector_collection=os.getenv("FINCREDIT_PGVECTOR_COLLECTION", Settings.pgvector_collection).strip(),
+        oidc_jwks_url=os.getenv("FINCREDIT_OIDC_JWKS_URL", Settings.oidc_jwks_url).strip(),
+        oidc_issuer=os.getenv("FINCREDIT_OIDC_ISSUER", Settings.oidc_issuer).strip(),
+        oidc_audience=os.getenv("FINCREDIT_OIDC_AUDIENCE", Settings.oidc_audience).strip(),
+        oidc_algorithms=tuple(filter(None, (
+            item.strip().upper()
+            for item in os.getenv("FINCREDIT_OIDC_ALGORITHMS", ",".join(Settings.oidc_algorithms)).split(",")
+        ))),
+        oidc_roles_claim=os.getenv("FINCREDIT_OIDC_ROLES_CLAIM", Settings.oidc_roles_claim).strip(),
+        oidc_org_claim=os.getenv("FINCREDIT_OIDC_ORG_CLAIM", Settings.oidc_org_claim).strip(),
+        oidc_name_claim=os.getenv("FINCREDIT_OIDC_NAME_CLAIM", Settings.oidc_name_claim).strip(),
+        oidc_role_mappings=tuple(sorted(
+            (str(source), str(target)) for source, target in json.loads(
+                os.getenv("FINCREDIT_OIDC_ROLE_MAPPINGS", "{}")
+            ).items()
+        )),
+        oidc_leeway_seconds=int(os.getenv("FINCREDIT_OIDC_LEEWAY_SECONDS", str(Settings.oidc_leeway_seconds))),
         data_dir=data_dir,
     )
 
@@ -67,6 +105,39 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("FINCREDIT_IDENTITY_PROVIDER 必须是 demo-header 或 oidc")
     if settings.deployment_environment == "production" and settings.identity_provider == "demo-header":
         errors.append("生产环境禁止使用 demo-header 身份提供方")
+    if settings.embedding_provider not in {"hash-local", "openai"}:
+        errors.append("FINCREDIT_EMBEDDING_PROVIDER 必须是 hash-local 或 openai")
+    if settings.vector_store_backend not in {"memory", "pgvector"}:
+        errors.append("FINCREDIT_VECTOR_STORE_BACKEND 必须是 memory 或 pgvector")
+    if settings.embedding_dimensions <= 0:
+        errors.append("FINCREDIT_EMBEDDING_DIMENSIONS 必须大于 0")
+    if settings.embedding_provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+        errors.append("OPENAI_API_KEY 未配置，无法使用 OpenAI Embedding")
+    if settings.vector_store_backend == "pgvector" and not settings.pgvector_connection:
+        errors.append("FINCREDIT_PGVECTOR_CONNECTION 未配置")
+    if settings.identity_provider == "oidc":
+        required_oidc = {
+            "FINCREDIT_OIDC_JWKS_URL": settings.oidc_jwks_url,
+            "FINCREDIT_OIDC_ISSUER": settings.oidc_issuer,
+            "FINCREDIT_OIDC_AUDIENCE": settings.oidc_audience,
+        }
+        errors.extend(f"{name} 未配置" for name, value in required_oidc.items() if not value)
+        asymmetric_algorithms = {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"}
+        if not settings.oidc_algorithms or not set(settings.oidc_algorithms).issubset(asymmetric_algorithms):
+            errors.append("FINCREDIT_OIDC_ALGORITHMS 只允许受信任的非对称签名算法")
+        if settings.oidc_leeway_seconds < 0:
+            errors.append("FINCREDIT_OIDC_LEEWAY_SECONDS 不能小于 0")
+        supported_roles = {"account_manager", "risk_manager", "approver", "compliance_admin"}
+        if any(not source or target not in supported_roles for source, target in settings.oidc_role_mappings):
+            errors.append("FINCREDIT_OIDC_ROLE_MAPPINGS 包含无效业务角色映射")
+        if settings.deployment_environment == "production" and (
+            not settings.oidc_jwks_url.startswith("https://") or not settings.oidc_issuer.startswith("https://")
+        ):
+            errors.append("生产 OIDC JWKS URL 与 Issuer 必须使用 HTTPS")
+    if settings.deployment_environment == "production" and settings.embedding_provider != "openai":
+        errors.append("生产环境必须使用 openai Embedding Provider")
+    if settings.deployment_environment == "production" and settings.vector_store_backend != "pgvector":
+        errors.append("生产环境必须使用 pgvector 向量数据库")
     if settings.openai_timeout_seconds <= 0:
         errors.append("OPENAI_TIMEOUT_SECONDS 必须大于 0")
     if settings.agent_max_retries < 0:

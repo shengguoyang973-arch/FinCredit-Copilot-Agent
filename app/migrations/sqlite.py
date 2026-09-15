@@ -58,6 +58,19 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_approval_tasks_application ON approval_tasks(application_id, submitted_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_audit_events_hash ON audit_events(event_hash)",
     )),
+    ("0004_configurable_policy_rules", (
+        """CREATE TABLE IF NOT EXISTS policy_rules (
+            id TEXT NOT NULL, policy_id TEXT, version TEXT NOT NULL,
+            rule_type TEXT NOT NULL, parameters_json TEXT NOT NULL,
+            severity TEXT NOT NULL, failure_result TEXT NOT NULL,
+            failure_message TEXT NOT NULL, pass_message TEXT NOT NULL,
+            effective_date TEXT NOT NULL, source_name TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id, version)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_policy_rules_active ON policy_rules(is_active, id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_policy_rules_one_active ON policy_rules(id) WHERE is_active = 1",
+    )),
 )
 
 

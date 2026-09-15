@@ -2,13 +2,15 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent MVP。v0.3 使用 LangChain 统一模型调用、结构化输出和 RAG 检索接口，并加入原子审批、职责分离和防篡改审计链；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.4 在 LangChain 编排和审批治理基础上，加入政策规则版本化、OpenAI Embedding、PostgreSQL/pgvector 持久向量检索，以及企业 OIDC JWT/JWKS 验签；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
 LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/langchain-rag.md](docs/langchain-rag.md)。
 
 身份、审批一致性与审计完整性说明见 [docs/governed-workflow.md](docs/governed-workflow.md)。
+
+生产 RAG、规则配置和 OIDC 部署说明见 [docs/production-runtime.md](docs/production-runtime.md)。
 
 API 已按领域拆分到 `app/routers/`，`main.py` 只负责应用装配、静态工作台和路由注册。
 
@@ -18,16 +20,18 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 
 - 基于角色的访问控制（客户经理、风险经理、审批人、合规管理员）
 - 身份提供方默认拒绝：未知 Provider 返回服务不可用，生产环境就绪检查禁止演示身份头
+- 企业 OIDC 验签：按 `kid` 从 JWKS 取公钥，强制校验非对称算法、签发方、受众、过期时间和必需声明
 - 组织级 ABAC、审批职责分离、唯一审批任务历史和报告哈希锁定
 - 预审持久化、审批提交与审批决策使用 SQLite 原子事务和条件状态更新
 - SHA-256 链式审计事件及合规完整性校验接口
 - LangChain LCEL 模型管线：`ChatPromptTemplate -> ChatModel -> Pydantic structured output`
 - LangChain `BaseRetriever` 标准接口下的政策混合检索、引用和检索轨迹
+- 正式向量路径：OpenAI `text-embedding-3-small` 可配置维度，`langchain-postgres` + pgvector 持久化与多实例安全刷新
 - RAG 离线评测与参数网格搜索，覆盖 Hit Rate、Recall、MRR 和综合分数
 - 脱敏模拟客户、授信申请与交易流水查询；申请状态和审计事件均持久化
 - 带版本与条款号的授信政策检索
 - SQLite 持久化政策库；合规管理员可通过接口新增或更新政策条款
-- 预审规则引擎雏形：集中处理行业准入、经营年限、逾期、负债率、申请额度与材料完整性规则
+- 政策规则配置化：四类白名单规则、参数字段校验、单一生效版本、历史版本保留和合规导入审计
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -58,13 +62,18 @@ uvicorn app.main:app --reload
 docker compose up --build
 ```
 
-容器将数据保存到 Docker 命名卷 `fincredit-data`；本地运行默认保存到 `data/fincredit.db`。可通过 `FINCREDIT_DATA_DIR` 指定受控数据目录。
+Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向量数据分别保存到 `fincredit-data`、`fincredit-vectors` 命名卷。Compose 默认采用 `hash-local + pgvector`，便于无外部密钥验证持久向量链路，但不满足生产配置门禁。
 
 ## 配置
 
 - `FINCREDIT_DATA_DIR`：本地数据库和上传材料保存目录，默认 `data/`。
 - `FINCREDIT_ENVIRONMENT`：运行环境，可选 `development`、`test`、`production`；生产环境禁止 `demo-header`。
 - `FINCREDIT_IDENTITY_PROVIDER`：身份提供方，只接受 `demo-header` 或 `oidc`；未知值不会降级为演示身份。
+- `FINCREDIT_OIDC_JWKS_URL` / `FINCREDIT_OIDC_ISSUER` / `FINCREDIT_OIDC_AUDIENCE`：OIDC 验签三项必需配置。
+- `FINCREDIT_OIDC_ALGORITHMS`：逗号分隔的非对称算法白名单，默认 `RS256`；不接受 `HS*`。
+- `FINCREDIT_OIDC_ROLES_CLAIM` / `FINCREDIT_OIDC_ORG_CLAIM` / `FINCREDIT_OIDC_NAME_CLAIM`：声明映射，支持点号分隔的嵌套路径。
+- `FINCREDIT_OIDC_ROLE_MAPPINGS`：企业组到业务角色的 JSON 映射，例如 `{"credit-risk-group":"risk_manager"}`。
+- `FINCREDIT_OIDC_LEEWAY_SECONDS`：Token 时钟偏差，默认 `30` 秒。
 - `FINCREDIT_AGENT_PROVIDER`：Agent Provider 名称，默认 `deterministic-local`。
 - `OPENAI_API_KEY`：使用真实 OpenAI Provider 时必需。
 - `OPENAI_MODEL`：真实模型名称，默认 `gpt-4.1-mini`。
@@ -83,6 +92,14 @@ docker compose up --build
 - `FINCREDIT_RAG_VECTOR_WEIGHT`：向量召回权重，调优默认值为 `0.15`。
 - `FINCREDIT_RAG_MIN_VECTOR_SCORE`：无词法命中时的最低向量分数，调优默认值为 `0.0`。
 - `FINCREDIT_RAG_CHUNK_SIZE`：政策切分最大字符数，默认 `180`。
+- `FINCREDIT_EMBEDDING_PROVIDER`：`hash-local` 或 `openai`；生产环境必须是 `openai`。
+- `FINCREDIT_EMBEDDING_MODEL`：默认 `text-embedding-3-small`。
+- `FINCREDIT_EMBEDDING_DIMENSIONS`：向量维度，默认 `256`；修改后会生成新的索引指纹。
+- `FINCREDIT_VECTOR_STORE_BACKEND`：`memory` 或 `pgvector`；生产环境必须是 `pgvector`。
+- `FINCREDIT_PGVECTOR_CONNECTION`：SQLAlchemy/psycopg 连接串，例如 `postgresql+psycopg://user:password@host/db`。
+- `FINCREDIT_PGVECTOR_COLLECTION`：政策向量集合名，默认 `fincredit_policy_chunks`。
+
+`FINCREDIT_ENVIRONMENT=production` 时，就绪检查要求同时配置 `oidc + openai embedding + pgvector`。完整模板、Token 声明和索引命令见 [生产运行文档](docs/production-runtime.md)。
 
 ## LangChain 与 RAG 数据流
 
@@ -97,7 +114,7 @@ docker compose up --build
   -> Agent Run、RAG Trace、预审报告和审计日志
 ```
 
-本项目采用“确定性规则 + RAG 证据 + LangChain 模型表达”的分层设计。额度、准入和提交拦截不交给大模型决定；LangChain 负责受控上下文编排和结构化生成。政策检索结果遵循 LangChain `Document`/`BaseRetriever` 契约，可以逐步替换为 PGVector、Milvus、Elasticsearch 或托管检索服务。
+本项目采用“配置化确定性规则 + RAG 证据 + LangChain 模型表达”的分层设计。额度、准入和提交拦截不交给大模型决定；LangChain 负责受控上下文编排和结构化生成。开发默认使用确定性哈希向量和内存库，生产路径使用 OpenAI Embedding 与 pgvector，并在政策内容、切分或向量配置变化时刷新索引。
 
 真实大模型模式示例：
 
@@ -117,6 +134,18 @@ $env:DEEPSEEK_MODEL = "deepseek-v4-pro"
 uvicorn app.main:app --reload
 ```
 
+构建当前环境的政策向量索引：
+
+```powershell
+python scripts\index_policies.py
+```
+
+## 政策规则版本管理
+
+合规管理员通过 `POST /v1/knowledge/rules` 导入规则。系统只接受 `minimum`、`ratio_cap`、`any_threshold`、`required_materials` 四种解释器和显式字段白名单；同一规则 ID 的新版本会原子停用旧版本，但历史记录仍可通过 `GET /v1/knowledge/rules?include_inactive=true` 查询。示例见 `demo_data/policy_rule_import_example.json`。
+
+政策正文与可执行规则分离：`policy_id` 把规则发现结果绑定到 RAG 强制证据，`MAT-1` 等无正文规则可将 `policy_id` 置空。所有导入操作进入审计链。
+
 ## 质量门禁
 
 ```powershell
@@ -127,7 +156,7 @@ python scripts\tune_rag.py
 python -m pytest -q
 ```
 
-`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 9 个场景覆盖高风险规则命中、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答追踪、Agent 指标聚合、Agent 输出治理边界、审批职责分离和审计链校验。
+`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 11 个场景覆盖高风险规则命中、规则版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答追踪、Agent 指标聚合、Agent 输出治理边界、审批职责分离和审计链校验。
 
 `release_gate.py` 在质量门禁之上增加 Prompt/Provider 与 RAG 评测门槛，检查准确率、证据引用率、人工审批边界、RAG Hit Rate、Recall 和 MRR；`GET /ready` 用于容器就绪探针。
 
@@ -139,7 +168,7 @@ python -m pytest -q
 
 ## 演示数据
 
-`demo_data/` 提供了一套完整虚拟材料包，包含两个授信案例的营业执照、财务报表、银行流水、智能体问答示例和政策导入示例。演示时可在工作台选择对应申请后上传这些文件，触发材料抽取、规则命中、预审报告、智能体问答和运行观测面板。
+`demo_data/` 提供了一套完整虚拟材料包，包含两个授信案例的营业执照、财务报表、银行流水、智能体问答、政策条款和政策规则导入示例。演示时可在工作台选择对应申请后上传这些文件，触发材料抽取、规则命中、预审报告、智能体问答和运行观测面板。
 
 政策条款导入接口需要 `X-User-Id: compliance_001`。数据库会自动创建在 `data/fincredit.db`；它仅含演示政策，禁止放入真实客户或生产制度数据。
 
@@ -163,11 +192,11 @@ Agent 当前白名单工具包括：`get_application_snapshot`、`get_material_s
 
 ## 重要边界
 
-本项目使用完全模拟、脱敏的数据。当前 SQLite 哈希链能够发现修改，但不等同于外部 WORM/不可变存储。生产接入前仍须替换本地仓储为受控数据服务，接入企业 OIDC、字段级权限、密钥管理、DLP、不可篡改日志平台和人工审批流程。
+本项目使用完全模拟、脱敏的数据。当前 SQLite 哈希链能够发现修改，但不等同于外部 WORM/不可变存储。OIDC/JWKS 与 pgvector 已提供正式适配，但生产接入前仍须把本地业务仓储替换为受控数据服务，并完成密钥管理、DLP、不可篡改日志平台和企业 IdP 联调。
 
 ## 生产上线清单
 
-- 配置并验证企业 SSO/OIDC JWKS、签发方、受众、Token 时钟偏差与撤销策略；生产环境不得启用演示身份头。
+- 在预生产环境联调企业 SSO/OIDC JWKS 轮换、签发方、受众、Token 时钟偏差与撤销策略；生产环境不得启用演示身份头。
 - 接入受管对象存储、恶意文件扫描、OCR/版面解析与文档保留策略；不得把未脱敏材料直接发送给外部模型。
 - 替换 SQLite 为支持事务隔离和行锁的受管数据库；将本地防篡改哈希链复制到 WORM/SIEM，并配置备份、告警和灾备。
 - 以脱敏、标注过的真实案例建立评测集，覆盖事实准确率、工具调用失败率、越权率、拒答率、延迟与成本。

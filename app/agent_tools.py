@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.document_store import material_check
 from app.knowledge_store import get_policies
 from app.repository import get_customer
-from app.risk_rules import POLICY_EVIDENCE_IDS
+from app.rule_store import active_policy_ids
 from app.workflow_store import get_latest_approval_task
 
 ALLOWED_AGENT_TOOLS = {
@@ -66,7 +66,7 @@ def _execute_tool(tool_name: str, application) -> dict:
             ],
         }
     if tool_name == "get_policy_evidence":
-        return {"policy_ids": [policy.id for policy in get_policies(POLICY_EVIDENCE_IDS)]}
+        return {"policy_ids": [policy.id for policy in get_policies(active_policy_ids())]}
     if tool_name == "get_approval_status":
         task = get_latest_approval_task(application.id)
         if not task:

@@ -17,9 +17,12 @@ os.environ["FINCREDIT_DATA_DIR"] = str(TEMP_DATA_DIR)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.approval_policy import evaluate_submission_policy  # noqa: E402
-from app.domain import Role, User  # noqa: E402
+from app.config import Settings, validate_settings  # noqa: E402
+from app.domain import LoanApplication, Role, User  # noqa: E402
 from app.main import app  # noqa: E402
 from app.repository import USERS  # noqa: E402
+from app.risk_rules import evaluate_pre_review_rules  # noqa: E402
+from app.rule_store import list_policy_rules  # noqa: E402
 from app.state_store import verify_audit_chain  # noqa: E402
 
 client = TestClient(app)
@@ -152,6 +155,35 @@ def scenario_audit_chain_is_verifiable() -> None:
     assert integrity["event_count"] > 0
 
 
+def scenario_policy_rule_version_is_applied() -> None:
+    body = {
+        "id": "POL-2.1", "policy_id": "POL-2.1", "version": "quality-2026.02",
+        "rule_type": "ratio_cap",
+        "parameters": {"application_field": "requested_amount", "base_field": "annual_revenue", "ratio": 0.10, "absolute_cap": 5_000_000},
+        "severity": "high", "failure_result": "fail",
+        "failure_message": "申请额度超出建议上限 {suggested_max_amount:,} 元。",
+        "pass_message": "申请额度未超过建议上限 {suggested_max_amount:,} 元。",
+        "effective_date": "2026-02-01", "source_name": "quality-gate",
+    }
+    response = client.post("/v1/knowledge/rules", headers={"X-User-Id": "compliance_001"}, json=body)
+    assert response.status_code == 201, response.text
+    decision = evaluate_pre_review_rules(
+        LoanApplication("APP-QUALITY", "C-QUALITY", 300_000, 12, "流动资金", "sales_001"),
+        {"operating_years": 6, "annual_revenue": 2_000_000, "debt_ratio": 0.2, "overdue_days_12m": 0},
+        {"missing": []},
+        list_policy_rules(),
+    )
+    assert decision.suggested_max_amount == 200_000
+    assert any(item.rule_id == "POL-2.1" and item.result == "fail" for item in decision.findings)
+
+
+def scenario_production_runtime_fails_closed() -> None:
+    errors = validate_settings(Settings(deployment_environment="production", identity_provider="demo-header"))
+    assert "生产环境禁止使用 demo-header 身份提供方" in errors
+    assert "生产环境必须使用 openai Embedding Provider" in errors
+    assert "生产环境必须使用 pgvector 向量数据库" in errors
+
+
 SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("rule_hits_for_high_risk_application", scenario_rule_hits_for_high_risk_application),
     ("unauthorized_actions_are_rejected", scenario_unauthorized_actions_are_rejected),
@@ -161,6 +193,8 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("business_question_is_answered_and_traced", scenario_business_question_is_answered_and_traced),
     ("observability_metrics_track_agent_health", scenario_observability_metrics_track_agent_health),
     ("approval_separation_of_duties", scenario_approval_separation_of_duties),
+    ("policy_rule_version_is_applied", scenario_policy_rule_version_is_applied),
+    ("production_runtime_fails_closed", scenario_production_runtime_fails_closed),
     ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )
 

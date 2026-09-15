@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain import LoanApplication
-
-POLICY_EVIDENCE_IDS = {"POL-1.2", "POL-2.1", "POL-3.4"}
+from app.domain import LoanApplication, PolicyRule
+from app.rule_store import list_policy_rules
 
 
 @dataclass(frozen=True)
 class RiskRuleResult:
     rule_id: str
+    policy_id: str | None
     result: str
     message: str
     severity: str
@@ -17,6 +17,7 @@ class RiskRuleResult:
     def to_dict(self) -> dict:
         return {
             "rule_id": self.rule_id,
+            "policy_id": self.policy_id,
             "result": self.result,
             "message": self.message,
             "severity": self.severity,
@@ -36,37 +37,67 @@ class PreReviewRuleDecision:
     def findings_as_dicts(self) -> list[dict]:
         return [finding.to_dict() for finding in self.findings]
 
+    @property
+    def policy_evidence_ids(self) -> set[str]:
+        return {finding.policy_id for finding in self.findings if finding.policy_id}
 
-def evaluate_pre_review_rules(application: LoanApplication, customer: dict, materials: dict) -> PreReviewRuleDecision:
+
+def evaluate_pre_review_rules(
+    application: LoanApplication,
+    customer: dict,
+    materials: dict,
+    rules: list[PolicyRule] | None = None,
+) -> PreReviewRuleDecision:
+    rules = rules if rules is not None else list_policy_rules()
     findings: list[RiskRuleResult] = []
-    suggested_max_amount = min(int(customer["annual_revenue"] * 0.30), 5_000_000)
+    suggested_limits: list[int] = []
 
-    def add(rule_id: str, result: str, message: str, severity: str) -> None:
-        findings.append(RiskRuleResult(rule_id, result, message, severity))
+    def add(rule: PolicyRule, triggered: bool, context: dict | None = None) -> None:
+        context = context or {}
+        findings.append(RiskRuleResult(
+            rule.id,
+            rule.policy_id,
+            rule.failure_result if triggered else "pass",
+            (rule.failure_message if triggered else rule.pass_message).format_map(context),
+            rule.severity if triggered else "info",
+        ))
 
-    if customer["operating_years"] < 2:
-        add("POL-1.2", "fail", "企业持续经营不足两年，不满足基础准入要求。", "block")
-    else:
-        add("POL-1.2", "pass", "企业持续经营年限满足准入要求。", "info")
+    for rule in rules:
+        params = rule.parameters
+        if rule.rule_type == "minimum":
+            add(rule, float(customer[params["field"]]) < float(params["minimum"]))
+            continue
+        if rule.rule_type == "ratio_cap":
+            limit = min(
+                int(float(customer[params["base_field"]]) * float(params["ratio"])),
+                int(params["absolute_cap"]),
+            )
+            suggested_limits.append(limit)
+            add(rule, int(getattr(application, params["application_field"])) > limit, {"suggested_max_amount": limit})
+            continue
+        if rule.rule_type == "any_threshold":
+            triggered = any(_compare(
+                float(customer[condition["field"]]), condition["operator"], float(condition["value"]),
+            ) for condition in params["conditions"])
+            add(rule, triggered)
+            continue
+        if rule.rule_type == "required_materials":
+            missing = materials.get("missing", [])
+            add(rule, bool(missing), {"missing_labels": "、".join(item["label"] for item in missing)})
 
-    if application.requested_amount > suggested_max_amount:
-        add("POL-2.1", "fail", f"申请额度超出建议上限 {suggested_max_amount:,} 元。", "high")
-    else:
-        add("POL-2.1", "pass", f"申请额度未超过建议上限 {suggested_max_amount:,} 元。", "info")
-
-    if customer["overdue_days_12m"] > 10 or customer["debt_ratio"] > 0.75:
-        add("POL-3.4", "review", "存在逾期或高负债率，必须人工强化审查。", "high")
-    else:
-        add("POL-3.4", "pass", "未触发逾期与高负债率人工强化审查条件。", "info")
-
-    if materials["missing"]:
-        labels = "、".join(item["label"] for item in materials["missing"])
-        add("MAT-1", "review", f"缺少以下材料：{labels}，须补齐后由人工复核。", "high")
-    else:
-        add("MAT-1", "pass", "必需材料已齐全。", "info")
+    suggested_max_amount = min(suggested_limits) if suggested_limits else 0
 
     return PreReviewRuleDecision(
         findings=findings,
         suggested_max_amount=suggested_max_amount,
-        requires_manual_review=any(item.severity in {"high", "block"} for item in findings),
+        requires_manual_review=any(item.result != "pass" and item.severity in {"high", "block"} for item in findings),
     )
+
+
+def _compare(left: float, operator: str, right: float) -> bool:
+    return {
+        "gt": left > right,
+        "gte": left >= right,
+        "lt": left < right,
+        "lte": left <= right,
+    }[operator]

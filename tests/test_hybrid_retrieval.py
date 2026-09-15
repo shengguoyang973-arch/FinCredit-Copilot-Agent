@@ -20,3 +20,21 @@ def test_index_has_versioned_chunk_citations() -> None:
     assert retriever.store.count() >= 1
     hits = retriever.search("经营年限", [SEED_POLICIES[0]])
     assert hits[0].citation.startswith("POL-1.2")
+
+
+def test_unchanged_policy_index_is_reused_between_searches() -> None:
+    class CountingEmbedding(HashEmbeddingAdapter):
+        def __init__(self):
+            super().__init__(32)
+            self.document_batches = 0
+
+        def embed_documents(self, texts):
+            self.document_batches += 1
+            return super().embed_documents(texts)
+
+    embedding = CountingEmbedding()
+    retriever = HybridPolicyRetriever(embedding, InMemoryVectorStore())
+    policies = list(SEED_POLICIES)
+    retriever.search("额度", policies)
+    retriever.search("逾期", policies)
+    assert embedding.document_batches == 1

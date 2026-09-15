@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-FinCredit Copilot v0.2 将模型编排和政策检索迁移到 LangChain 标准接口，同时保留确定性授信规则。大模型用于解释、归纳和生成草稿，不负责批准、拒绝、退回或改变申请状态。
+FinCredit Copilot v0.4 将模型编排和政策检索统一在 LangChain 标准接口下，同时保留配置化确定性授信规则。大模型用于解释、归纳和生成草稿，不负责批准、拒绝、退回或改变申请状态。
 
 这里的“RAG 微调”指分块、召回、融合权重、阈值、Top-K 和重排参数的离线调优。当前版本没有声称训练 OpenAI、DeepSeek 或其他基础模型权重。
 
@@ -34,10 +34,12 @@ flowchart LR
 - `app/rag/tuning.py`：Hit Rate、Recall、MRR 评测与参数网格搜索。
 - `app/agent_provider.py`：LCEL 模型链和外部 Provider 适配。
 - `app/agent_output.py`：Pydantic 输出模型、证据约束和审批边界校验。
+- `app/embedding.py`：开发用哈希向量与正式 OpenAI Embedding 适配器。
+- `app/vector_store.py`：内存与 `langchain-postgres`/pgvector 适配器。
 
 ## 检索策略
 
-每个政策条款先按稳定句段切分并生成引用信息。检索分数由词法分数和哈希向量余弦相似度归一化融合：
+每个政策条款先按稳定句段切分并生成引用信息。检索分数由词法分数和向量余弦相似度归一化融合：
 
 ```text
 score = normalized_lexical_score * lexical_weight
@@ -55,6 +57,8 @@ score = normalized_lexical_score * lexical_weight
 | `chunk_size` | 180 |
 
 确定性规则直接引用的政策编号属于强制证据：即使语义检索未命中，也会附加到证据链并在 RAG Trace 标记 `forced_match=true`。这避免把强制合规证据完全交给概率检索决定。
+
+开发默认使用可复现的 `hash-local`，正式路径使用 OpenAI `text-embedding-3-small` 和可配置 `dimensions`。政策、切分尺寸、模型或向量维度共同形成索引指纹；指纹未变化时跨请求复用索引。pgvector 使用稳定文档 ID、集合 manifest 和 advisory lock，先写入新快照再删除旧 chunk。
 
 ## 执行调优
 
@@ -103,8 +107,8 @@ OpenAI 和 DeepSeek 都通过 LangChain `ChatOpenAI` 适配器调用：
 
 ## 后续路线
 
-- 将哈希向量替换为受控 Embedding Provider，并保存向量模型版本。
-- 将内存向量库替换为 PGVector/Milvus/Elasticsearch，加入租户和政策版本过滤。
+- 为向量集合加入租户、政策生效区间和数据分级过滤。
+- 建立 Embedding 模型升级的双索引灰度、离线对比和回滚流程。
 - 建立政策生效、失效、审批发布和历史版本模型。
 - 引入经合规审批的难负样本、冲突政策、多跳查询和时间有效性测试。
 - 若确需基础模型微调，另建数据治理、训练作业、模型注册、灰度、回滚和偏差评估流程。

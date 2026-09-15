@@ -5,6 +5,7 @@ from app import knowledge_store
 from app import workflow_store
 from app import state_store
 from app import document_store
+from app import rule_store
 from app.migrations.sqlite import apply_migrations
 
 
@@ -15,6 +16,7 @@ def isolated_policy_database(tmp_path, monkeypatch):
     with database.connection() as connection:
         apply_migrations(connection)
     knowledge_store.initialize()
+    rule_store.initialize()
     workflow_store.initialize()
     state_store.initialize()
     document_store.initialize()

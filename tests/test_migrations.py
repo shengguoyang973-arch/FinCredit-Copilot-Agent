@@ -20,6 +20,7 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "agent_runs",
         "agent_run_events",
         "application_documents",
+        "policy_rules",
     }
     assert expected.issubset(table_names())
 

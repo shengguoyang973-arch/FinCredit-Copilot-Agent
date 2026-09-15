@@ -64,7 +64,7 @@ class RAGResult:
     query: str
     hits: tuple[RAGPolicyHit, ...]
     config: RAGConfig
-    retriever: str = "langchain-hybrid-policy-v1"
+    retriever: str = "langchain-hybrid-memory-v2"
 
     def trace(self) -> dict:
         return {

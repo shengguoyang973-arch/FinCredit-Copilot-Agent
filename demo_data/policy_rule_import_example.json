@@ -1,0 +1,18 @@
+{
+  "id": "POL-2.1",
+  "policy_id": "POL-2.1",
+  "version": "2026.02",
+  "rule_type": "ratio_cap",
+  "parameters": {
+    "application_field": "requested_amount",
+    "base_field": "annual_revenue",
+    "ratio": 0.25,
+    "absolute_cap": 5000000
+  },
+  "severity": "high",
+  "failure_result": "fail",
+  "failure_message": "申请额度超出建议上限 {suggested_max_amount:,} 元。",
+  "pass_message": "申请额度未超过建议上限 {suggested_max_amount:,} 元。",
+  "effective_date": "2026-02-01",
+  "source_name": "demo-configurable-rule"
+}

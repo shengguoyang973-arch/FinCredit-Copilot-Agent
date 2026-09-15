@@ -16,7 +16,7 @@ from app.knowledge_store import list_policies
 from app.observability import current_request_id, log_event
 from app.rag import retrieve_policy_context
 from app.repository import audit, get_customer
-from app.risk_rules import POLICY_EVIDENCE_IDS, PreReviewRuleDecision, evaluate_pre_review_rules
+from app.risk_rules import PreReviewRuleDecision, evaluate_pre_review_rules
 from app.workflow_store import (
     create_agent_run,
     create_approval_task,
@@ -196,7 +196,7 @@ def _build_agent_context(application: LoanApplication, question: str | None = No
     retrieval = retrieve_policy_context(
         policy_query,
         list_policies(),
-        required_policy_ids=POLICY_EVIDENCE_IDS,
+        required_policy_ids=rule_decision.policy_evidence_ids,
     )
     evidence = [
         asdict(hit.policy) | {

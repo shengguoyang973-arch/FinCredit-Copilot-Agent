@@ -9,7 +9,7 @@ from app.repository import USERS
 def current_user(x_user_id: str | None = Header(None, alias="X-User-Id"), authorization: str | None = Header(None)) -> User:
     settings = get_settings()
     try:
-        provider = identity_provider_for(settings.identity_provider)
+        provider = identity_provider_for(settings.identity_provider, settings)
         if settings.identity_provider == "oidc":
             if not authorization:
                 raise LookupError("缺少 Authorization Bearer Token")

@@ -51,6 +51,21 @@ class PolicyClause:
     keywords: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class PolicyRule:
+    id: str
+    policy_id: str | None
+    version: str
+    rule_type: str
+    parameters: dict
+    severity: str
+    failure_result: str
+    failure_message: str
+    pass_message: str
+    effective_date: str
+    source_name: str
+
+
 @dataclass
 class AuditEvent:
     action: str

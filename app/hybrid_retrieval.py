@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
+from threading import RLock
 
 from app.embedding import EmbeddingAdapter, get_embedding_adapter
 from app.knowledge_retrieval import retrieve_policy_hits
 from app.knowledge_retrieval import chunk_policy
 from app.domain import PolicyClause
-from app.vector_store import InMemoryVectorStore, VectorDocument
+from app.vector_store import InMemoryVectorStore, VectorDocument, VectorStoreAdapter
 
 
 @dataclass(frozen=True)
@@ -24,7 +27,7 @@ class HybridPolicyRetriever:
     def __init__(
         self,
         embedding: EmbeddingAdapter | None = None,
-        store: InMemoryVectorStore | None = None,
+        store: VectorStoreAdapter | None = None,
         *,
         lexical_weight: float = 0.85,
         vector_weight: float = 0.15,
@@ -34,6 +37,8 @@ class HybridPolicyRetriever:
         self.embedding = embedding or get_embedding_adapter()
         self.store = store or InMemoryVectorStore()
         self._policies: dict[str, PolicyClause] = {}
+        self._index_fingerprint = ""
+        self._lock = RLock()
         total_weight = lexical_weight + vector_weight
         if total_weight <= 0:
             raise ValueError("RAG 检索权重之和必须大于 0")
@@ -43,21 +48,36 @@ class HybridPolicyRetriever:
         self.chunk_size = chunk_size
 
     def index(self, policies: list[PolicyClause]) -> None:
-        # Rebuild the small demo index so replaced or deactivated policy chunks
-        # cannot remain searchable under stale content.
-        self.store.clear()
-        self._policies.clear()
-        for policy in policies:
-            self._policies[policy.id] = policy
-            for chunk in chunk_policy(policy, max_chars=self.chunk_size):
-                text = f"{policy.title} {' '.join(policy.keywords)} {chunk['text']}"
-                self.store.upsert(VectorDocument(chunk["id"], text, chunk, tuple(self.embedding.embed(text))))
+        payload = [policy.__dict__ for policy in sorted(policies, key=lambda item: item.id)]
+        fingerprint = hashlib.sha256(json.dumps(
+            {"policies": payload, "chunk_size": self.chunk_size, "embedding": self.embedding.name,
+             "dimensions": self.embedding.dimensions},
+            sort_keys=True, ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        with self._lock:
+            if fingerprint == self._index_fingerprint:
+                return
+            documents: list[VectorDocument] = []
+            current_policies: dict[str, PolicyClause] = {}
+            for policy in policies:
+                current_policies[policy.id] = policy
+                for chunk in chunk_policy(policy, max_chars=self.chunk_size):
+                    text = f"{policy.title} {' '.join(policy.keywords)} {chunk['text']}"
+                    documents.append(VectorDocument(chunk["id"], text, chunk, ()))
+            vectors = self.embedding.embed_documents([document.text for document in documents])
+            indexed = [
+                VectorDocument(document.id, document.text, document.metadata, tuple(vector))
+                for document, vector in zip(documents, vectors)
+            ]
+            self.store.replace(indexed)
+            self._policies = current_policies
+            self._index_fingerprint = fingerprint
 
     def search(self, query: str, policies: list[PolicyClause], limit: int = 10) -> list[HybridPolicyHit]:
         self.index(policies)
         lexical = {hit.policy.id: hit for hit in retrieve_policy_hits(query, policies, limit=limit * 2)}
         vector_scores: dict[str, float] = {}
-        for document, score in self.store.search(self.embedding.embed(query), limit=limit * 4):
+        for document, score in self.store.search(self.embedding.embed_query(query), limit=limit * 4):
             policy_id = document.metadata["policy_id"]
             vector_scores[policy_id] = max(vector_scores.get(policy_id, -1.0), score)
         hits: list[HybridPolicyHit] = []

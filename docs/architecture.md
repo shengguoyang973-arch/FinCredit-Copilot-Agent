@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.3 combines LangChain model/RAG composition with fail-closed identity selection, transactional approval state changes, separation of duties, and a tamper-evident audit chain.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.4 adds versioned executable policy rules, OpenAI Embeddings, persistent pgvector retrieval, and enterprise OIDC/JWKS verification to the governed LangChain workflow.
 
 ## Module Layout
 
@@ -13,8 +13,11 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/bootstrap.py`: Startup initialization for local stores.
 - `app/domain.py`: Domain entities and enums.
 - `app/security.py`: Fail-closed identity selection, role checks, and organization-scoped application access.
+- `app/identity.py`: Demo identity plus production JWT verification using JWKS, issuer, audience, algorithm allowlists, and claim mapping.
 - `app/services.py`: Business workflow orchestration for policy search, pre-review, Agent brief generation, real-time Agent Q&A, and approval submission.
-- `app/risk_rules.py`: Pre-review rule engine for admission, amount, overdue, leverage, and material completeness findings.
+- `app/rule_store.py`: Versioned rule repository, seed rules, parameter/field allowlists, and one-active-version semantics.
+- `app/risk_rules.py`: Safe interpreters for admission, amount, threshold, and material rules; no dynamic code execution.
+- `app/embedding.py` / `app/vector_store.py`: Hash/OpenAI embedding adapters and memory/pgvector stores with persistent manifests.
 - `app/approval_policy.py`: Submission guardrail engine for missing materials, blocking rules, high-risk findings, and override reasons.
 - `app/agent_provider.py`: LangChain LCEL prompt/model/structured-output pipeline with local deterministic fallback, OpenAI Responses, and DeepSeek-compatible implementations.
 - `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
@@ -35,8 +38,8 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 1. A user selects an application and role in the workbench.
 2. API routes authenticate the demo user with `X-User-Id` and enforce role permissions.
 3. Service orchestration loads application, customer, policy, and material status from stores.
-4. The pre-review rule engine produces deterministic findings and required policy IDs.
-5. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval and emits citation-bearing `Document` objects.
+4. The pre-review engine loads the active rule versions and produces deterministic findings plus their required policy IDs.
+5. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
 6. The tool allowlist supplies minimized, read-only business context without document body previews.
 7. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
 8. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
@@ -69,6 +72,10 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Every resubmission creates a new task; old returned or decided tasks remain queryable.
 - Pending approval tasks lock the pre-review report hash and reject decisions against changed evidence.
 - Unknown identity providers fail closed, and `/ready` rejects demo-header authentication in production.
+- OIDC validates the JWT signature by `kid` against cached JWKS keys and requires `exp`, `iat`, `iss`, `sub`, and `aud` claims.
+- Production readiness requires OIDC, OpenAI Embeddings, and pgvector; local-only adapters cannot silently pass production checks.
+- Rule imports are limited to four interpreters and approved business fields; message placeholders are validated before activation.
+- pgvector refreshes use stable IDs, a manifest, and a PostgreSQL advisory lock so multi-worker updates upsert before stale-vector cleanup.
 - Application access is scoped to the creator's organization except for compliance administrators.
 - Audit events include previous/current SHA-256 hashes, with a compliance-only integrity endpoint.
 - The quality gate checks rule hits, authorization failures, missing-material blocks, override handling, Agent output boundaries, separation of duties, and audit integrity.
@@ -77,8 +84,8 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 
 ## Production Extension Points
 
-- Implement enterprise JWKS verification behind the existing strict OIDC seam and persist tenant identifiers on applications.
 - Replace the SQLite adapter with PostgreSQL-backed repositories and promote `app/migrations/` to Alembic-managed migrations.
+- Add OIDC discovery, token revocation/introspection where required by the enterprise IdP, and persist tenant identifiers on applications.
 - Harden the OpenAI Provider with stricter structured output validation, DLP, tool-call allowlists, retry policy, cost tracking, and model-output eval scoring.
 - Expand `scripts/quality_gate.py` into CI/CD quality gates with larger labeled cases and model-output scoring.
 - Export observability data to OpenTelemetry, Prometheus, or an enterprise SIEM/log platform.

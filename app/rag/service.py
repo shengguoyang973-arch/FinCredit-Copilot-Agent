@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
+from app.config import get_settings
 from app.domain import PolicyClause
 from app.rag.contracts import RAGConfig, RAGPolicyHit, RAGResult
 from app.rag.retriever import build_policy_retriever
@@ -51,4 +52,5 @@ def retrieve_policy_context(
         for document in documents
         if str(document.metadata.get("policy_id")) in by_id
     )
-    return RAGResult(query=query, hits=hits, config=rag_config)
+    backend = get_settings().vector_store_backend
+    return RAGResult(query=query, hits=hits, config=rag_config, retriever=f"langchain-hybrid-{backend}-v2")

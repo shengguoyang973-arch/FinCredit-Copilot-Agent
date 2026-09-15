@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.database import connection as database_connection, database_path
+from app.rule_store import required_materials
 
 ALLOWED_TYPES = {"business_license", "financial_statement", "bank_statement"}
 
@@ -74,6 +75,6 @@ def list_documents(application_id: str) -> list[dict]:
 def material_check(application_id: str) -> dict:
     documents = list_documents(application_id)
     present = {document["document_type"] for document in documents}
-    required = {"business_license": "营业执照", "financial_statement": "财务报表", "bank_statement": "银行流水"}
+    required = required_materials()
     missing = [{"type": key, "label": label} for key, label in required.items() if key not in present]
     return {"documents": documents, "missing": missing, "complete": not missing}

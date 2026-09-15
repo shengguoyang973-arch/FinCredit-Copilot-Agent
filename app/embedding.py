@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 from typing import Protocol
+
+from app.config import Settings, get_settings
 
 
 class EmbeddingAdapter(Protocol):
     name: str
+    dimensions: int
 
     def embed(self, text: str) -> list[float]:
+        ...
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        ...
+
+    def embed_query(self, text: str) -> list[float]:
         ...
 
 
@@ -32,25 +40,62 @@ class HashEmbeddingAdapter:
         norm = math.sqrt(sum(value * value for value in vector)) or 1.0
         return [value / norm for value in vector]
 
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed(text)
+
 
 class OpenAIEmbeddingAdapter:
     name = "openai-embeddings"
 
-    def __init__(self, model: str = "text-embedding-3-small"):
+    def __init__(
+        self,
+        model: str = "text-embedding-3-small",
+        dimensions: int = 256,
+        timeout_seconds: float = 20.0,
+        max_retries: int = 2,
+    ):
         self.model = model
+        self.dimensions = dimensions
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self._client = None
+
+    def _openai(self):
+        if self._client is None:
+            from langchain_openai import OpenAIEmbeddings
+
+            self._client = OpenAIEmbeddings(
+                model=self.model,
+                dimensions=self.dimensions,
+                request_timeout=self.timeout_seconds,
+                max_retries=self.max_retries,
+            )
+        return self._client
 
     def embed(self, text: str) -> list[float]:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY 未配置，无法使用 Embedding Provider")
-        from openai import OpenAI
+        return self.embed_query(text)
 
-        response = OpenAI(api_key=api_key).embeddings.create(model=self.model, input=text)
-        return list(response.data[0].embedding)
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [list(vector) for vector in self._openai().embed_documents(texts)]
+
+    def embed_query(self, text: str) -> list[float]:
+        return list(self._openai().embed_query(text))
 
 
-def get_embedding_adapter() -> EmbeddingAdapter:
-    provider = os.getenv("FINCREDIT_EMBEDDING_PROVIDER", "hash-local").strip().lower()
-    if provider in {"openai", "openai-embeddings"}:
-        return OpenAIEmbeddingAdapter(os.getenv("FINCREDIT_EMBEDDING_MODEL", "text-embedding-3-small"))
-    return HashEmbeddingAdapter(int(os.getenv("FINCREDIT_EMBEDDING_DIMENSIONS", "128")))
+def get_embedding_adapter(settings: Settings | None = None) -> EmbeddingAdapter:
+    settings = settings or get_settings()
+    if settings.deployment_environment == "production" and settings.embedding_provider != "openai":
+        raise RuntimeError("生产环境禁止使用本地 Hash Embedding")
+    if settings.embedding_provider == "openai":
+        return OpenAIEmbeddingAdapter(
+            settings.embedding_model,
+            settings.embedding_dimensions,
+            settings.openai_timeout_seconds,
+            settings.agent_max_retries,
+        )
+    if settings.embedding_provider == "hash-local":
+        return HashEmbeddingAdapter(settings.embedding_dimensions)
+    raise RuntimeError(f"未配置的 Embedding Provider：{settings.embedding_provider}")

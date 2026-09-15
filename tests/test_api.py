@@ -31,7 +31,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.3.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.4.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -84,6 +84,7 @@ def test_demo_material_files_are_available() -> None:
         demo_root / "README.md",
         demo_root / "agent_questions.json",
         demo_root / "policy_import_example.json",
+        demo_root / "policy_rule_import_example.json",
         demo_root / "app001_huachen" / "营业执照.txt",
         demo_root / "app001_huachen" / "财务报表.txt",
         demo_root / "app001_huachen" / "银行流水.csv",
@@ -245,7 +246,7 @@ def test_policy_search_returns_versioned_evidence() -> None:
     response = client.post("/v1/knowledge/search", headers={"X-User-Id": "rm_001"}, json={"query": "额度 流动资金"})
     assert response.status_code == 200
     assert response.json()["results"][0]["id"] == "POL-2.1"
-    assert response.json()["retriever"] == "langchain-hybrid-policy-v1"
+    assert response.json()["retriever"] == "langchain-hybrid-memory-v2"
     assert response.json()["rag_config"]["top_k"] >= 1
 
 

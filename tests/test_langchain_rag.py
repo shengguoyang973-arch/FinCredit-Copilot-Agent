@@ -26,7 +26,7 @@ def test_rule_evidence_is_attached_to_rag_trace() -> None:
     )
     assert "POL-3.4" in [hit.policy.id for hit in result.hits]
     trace = result.trace()
-    assert trace["retriever"] == "langchain-hybrid-policy-v1"
+    assert trace["retriever"] == "langchain-hybrid-memory-v2"
     assert any(hit["policy_id"] == "POL-3.4" and hit["forced_match"] for hit in trace["hits"])
 
 
