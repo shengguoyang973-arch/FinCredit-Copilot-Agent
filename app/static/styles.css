@@ -362,14 +362,25 @@ button.is-loading::after {
 .observability-grid li { margin:6px 0; color:#c7d8ea; font-size:13px; }
 .upload-row,
 .decision-form,
-.chat-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.chat-row,
+.feedback-form { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
 .chat-row input,
-.decision-form input { flex:1; min-width:260px; }
+.decision-form input,
+.feedback-form input { flex:1; min-width:260px; }
 .missing { color:var(--amber); }
 .agent-brief h3,
 .observability-grid h3 { margin:0 0 9px; font-size:15px; color:#dff8ff; }
 .agent-brief p { font-size:14px; line-height:1.75; }
 .run-meta { font-size:12px!important; margin-bottom:9px; }
+.context-note { color:#9bdfff; font-size:12px!important; line-height:1.6; }
+.feedback-form {
+  align-items:center;
+  margin-top:14px;
+  padding-top:12px;
+  border-top:1px solid rgba(93,214,255,.14);
+}
+.feedback-form strong { color:#dff8ff; font-size:13px; }
+.feedback-form select { min-width:112px; }
 .brief-grid,
 .observability-grid {
   display:grid;

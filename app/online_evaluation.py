@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.config import get_settings
 from app.database import connection as database_connection
+from app.human_feedback import feedback_metrics
 from app.workflow_store import list_all_agent_runs
 
 
@@ -72,7 +73,7 @@ def online_run_metrics(limit: int | None = None) -> dict:
         "boundary_violation_rate": _rate(boundary_violations, total),
         "plan_adherence_rate": _mean(plan_adherence) if plan_adherence else None,
         "plan_sample_count": len(plan_adherence),
-    }
+    } | feedback_metrics([run["id"] for run in completed])
 
 
 def _rate(numerator: int, denominator: int) -> float:

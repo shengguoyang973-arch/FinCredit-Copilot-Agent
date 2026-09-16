@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from app.config import get_settings
 from app.data_platform import get_canonical_record
 from app.document_store import material_check
 from app.knowledge_store import get_policies
@@ -72,12 +75,19 @@ def _execute_tool(tool_name: str, application) -> dict:
         )
         if not canonical:
             return {"available": False, "reason": "canonical_customer_not_found", "organization_id": organization_id}
+        freshness = _canonical_freshness(canonical["ingested_at"])
         if canonical["classification"] == "restricted":
             return {
                 "available": False,
                 "reason": "classification_not_permitted_for_model_context",
                 "classification": canonical["classification"],
+                "freshness": freshness,
             }
+        primary = _safe_customer_snapshot(get_customer(application.customer_id)) or {}
+        canonical_fields = _safe_customer_snapshot(canonical["record"]) or {}
+        conflicting_fields = sorted(
+            key for key in canonical_fields if key in primary and canonical_fields[key] != primary[key]
+        )
         return {
             "available": True,
             "source": "data_platform",
@@ -86,7 +96,9 @@ def _execute_tool(tool_name: str, application) -> dict:
             "classification": canonical["classification"],
             "record_hash": canonical["record_hash"],
             "ingested_at": canonical["ingested_at"],
-            "fields": _safe_customer_snapshot(canonical["record"]),
+            "freshness": freshness,
+            "conflicting_fields": conflicting_fields,
+            "fields": canonical_fields,
         }
     if tool_name == "get_material_status":
         status = material_check(application.id)
@@ -135,3 +147,11 @@ def _safe_customer_snapshot(customer: dict | None) -> dict | None:
 def _application_organization(application) -> str | None:
     owner = USERS.get(application.created_by)
     return owner.organization_id if owner else None
+
+
+def _canonical_freshness(ingested_at: str) -> str:
+    try:
+        age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(ingested_at)).total_seconds()
+    except ValueError:
+        return "unknown"
+    return "stale" if age_seconds > get_settings().canonical_data_max_age_hours * 3600 else "fresh"

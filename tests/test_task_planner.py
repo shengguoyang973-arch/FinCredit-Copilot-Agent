@@ -5,12 +5,13 @@ from app.task_planner import build_task_plan
 
 def test_pre_review_plan_uses_only_governed_read_tools_and_controls() -> None:
     plan = build_task_plan("generate_brief")
-    assert plan.version == "v1"
+    assert plan.version == "v2"
     assert plan.tool_names == (
         "get_application_snapshot", "get_canonical_customer_snapshot", "get_material_status", "get_policy_evidence",
     )
     assert plan.steps[-1].id == "human_boundary"
     assert plan.steps[-1].kind == "governance"
+    assert any(step.id == "context_quality" for step in plan.steps)
     trace = plan.execution_trace([{"tool_name": name, "status": "success"} for name in plan.tool_names])
     assert all(item["status"] == "completed" for item in trace)
 

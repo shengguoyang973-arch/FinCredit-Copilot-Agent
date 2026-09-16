@@ -10,8 +10,9 @@ from app.agent_runtime.guardrails import AgentGuardrailError
 from app.config import get_settings
 from app.document_store import ALLOWED_TYPES, material_check, save_document
 from app.domain import Role, User
+from app.human_feedback import list_agent_feedback, record_agent_feedback
 from app.repository import audit, get_application, get_customer
-from app.schemas import AgentQuestionRequest, ApprovalSubmissionRequest
+from app.schemas import AgentFeedbackRequest, AgentQuestionRequest, ApprovalSubmissionRequest
 from app.security import can_access_application, current_user, filter_customer_fields, require_roles
 from app.services import answer_business_question, pre_review, resume_agent_run_execution, submit_for_approval
 from app.workflow_store import get_report, get_agent_run, list_agent_run_events, list_agent_runs
@@ -108,6 +109,39 @@ def agent_run_events(application_id: str, run_id: str, user: User = Depends(requ
     events = list_agent_run_events(run_id)
     audit("agent_run_events_viewed", user.id, application_id, run_id=run_id, result_count=len(events))
     return {"run_id": run_id, "application_id": application_id, "state": run["state"], "items": events}
+
+
+@router.get("/{application_id}/agent-runs/{run_id}/feedback")
+def agent_run_feedback(application_id: str, run_id: str, user: User = Depends(require_roles(Role.RISK_MANAGER, Role.APPROVER, Role.COMPLIANCE_ADMIN))) -> dict:
+    assert_application_access(application_id, user)
+    run = get_agent_run(run_id)
+    if not run or run["application_id"] != application_id:
+        raise HTTPException(status_code=404, detail="Agent Run 不存在")
+    items = list_agent_feedback(run_id)
+    audit("agent_feedback_viewed", user.id, application_id, run_id=run_id, result_count=len(items))
+    return {"run_id": run_id, "application_id": application_id, "items": items}
+
+
+@router.post("/{application_id}/agent-runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
+def submit_agent_feedback(application_id: str, run_id: str, body: AgentFeedbackRequest, user: User = Depends(require_roles(Role.RISK_MANAGER, Role.APPROVER, Role.COMPLIANCE_ADMIN))) -> dict:
+    assert_application_access(application_id, user)
+    run = get_agent_run(run_id)
+    if not run or run["application_id"] != application_id:
+        raise HTTPException(status_code=404, detail="Agent Run 不存在")
+    if run["state"] != "completed":
+        raise HTTPException(status_code=409, detail="仅已完成的 Agent Run 可以提交复核反馈")
+    try:
+        feedback = record_agent_feedback(
+            run_id=run_id, application_id=application_id, verdict=body.verdict,
+            category=body.category, comment=body.comment, actor_id=user.id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    audit(
+        "agent_feedback_recorded", user.id, application_id, run_id=run_id,
+        verdict=feedback["verdict"], category=feedback["category"], content_hash=feedback["content_hash"],
+    )
+    return {"message": "复核反馈已记录", "feedback": feedback}
 
 
 @router.post("/{application_id}/agent-runs/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED)

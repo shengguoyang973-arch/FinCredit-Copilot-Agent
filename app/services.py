@@ -8,6 +8,7 @@ from app.agent_tools import execute_agent_tools
 from app.agent_runtime import AgentRunState
 from app.agent_runtime.reliability import ReliableInvoker
 from app.agent_runtime.guardrails import redact_sensitive_text, validate_agent_question
+from app.context_governance import constrain_model_context
 from app.prompt_registry import get_prompt
 from app.approval_policy import SubmissionPolicyError, evaluate_submission_policy
 from app.document_store import material_check
@@ -51,7 +52,7 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
     run_id = run["id"]
     try:
         if run["state"] == AgentRunState.CREATED.value:
-            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING, planner="deterministic-task-planner-v1")
+            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING, planner="deterministic-task-planner-v2")
         customer, materials, rule_decision, findings, evidence, agent_context = _build_agent_context(
             application, task="generate_brief"
         )
@@ -76,7 +77,11 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
         if agent_brief.get("fallback"):
             transition_agent_run(run_id, AgentRunState.FALLBACK, reason=agent_brief.get("fallback_reason"))
             transition_agent_run(run_id, AgentRunState.VALIDATING, event_type="fallback_output_validated")
-        agent_brief = agent_brief | {"run_id": run_id, "created_at": run["created_at"]}
+        agent_brief = agent_brief | {
+            "run_id": run_id,
+            "created_at": run["created_at"],
+            "context_governance": agent_context.context_governance,
+        }
         report = {
             "application_id": application.id,
             "conclusion": rule_decision.conclusion,
@@ -88,6 +93,7 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
             "evidence": evidence,
             "materials": materials,
             "rag": agent_context.retrieval_trace,
+            "context_governance": agent_context.context_governance,
             "agent_brief": agent_brief,
             "task_plan": agent_context.task_plan,
         }
@@ -122,7 +128,7 @@ def answer_business_question(application: LoanApplication, actor: User, question
     run_id = run["id"]
     try:
         if run["state"] == AgentRunState.CREATED.value:
-            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING, planner="deterministic-task-planner-v1")
+            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING, planner="deterministic-task-planner-v2")
         _, _, _, _, _, agent_context = _build_agent_context(application, model_question, task="answer_question")
         snapshot = _agent_input_snapshot(agent_context, "answer_question", model_question)
         update_agent_run_snapshot(run_id, snapshot)
@@ -145,6 +151,7 @@ def answer_business_question(application: LoanApplication, actor: User, question
         if answer.get("fallback"):
             transition_agent_run(run_id, AgentRunState.FALLBACK, reason=answer.get("fallback_reason"))
             transition_agent_run(run_id, AgentRunState.VALIDATING, event_type="fallback_output_validated")
+        answer = answer | {"context_governance": agent_context.context_governance}
         agent_run = finalize_agent_run(run_id, snapshot, answer)
     except Exception as error:
         try:
@@ -228,6 +235,7 @@ def _build_agent_context(
         for hit in sorted(retrieval.hits, key=lambda item: item.policy.id)
     ]
     tool_results = execute_agent_tools(application, question, task_plan.tool_names)
+    model_evidence, model_tool_results, context_governance = constrain_model_context(evidence, tool_results)
     agent_context = AgentContext(
         application_id=application.id,
         customer_name=customer["name"],
@@ -235,13 +243,14 @@ def _build_agent_context(
         suggested_max_amount=rule_decision.suggested_max_amount,
         conclusion=rule_decision.conclusion,
         findings=findings,
-        evidence=evidence,
+        evidence=model_evidence,
         materials_complete=materials["complete"],
         missing_materials=materials["missing"],
-        tool_results=tool_results,
+        tool_results=model_tool_results,
         retrieval_trace=retrieval.trace(),
         task_plan=task_plan.to_dict(),
         plan_execution=task_plan.execution_trace(tool_results),
+        context_governance=context_governance,
     )
     return customer, materials, rule_decision, findings, evidence, agent_context
 
@@ -264,6 +273,7 @@ def _agent_input_snapshot(agent_context: AgentContext, task: str, question: str 
         "plan_execution": agent_context.plan_execution,
         "planner_version": agent_context.task_plan.get("version"),
         "planned_tool_names": agent_context.task_plan.get("tool_names", []),
+        "context_governance": agent_context.context_governance,
         "rag": agent_context.retrieval_trace,
         "duration_ms": duration_ms,
         "request_id": current_request_id(),

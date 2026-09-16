@@ -139,3 +139,14 @@ class DataIngestionRequest(BaseModel):
 
 class OnlineEvaluationBaselineRequest(BaseModel):
     name: str = Field(default="default", pattern=r"^[a-z][a-z0-9_-]{1,63}$")
+
+
+class AgentFeedbackRequest(BaseModel):
+    verdict: Literal["accepted", "needs_revision", "incorrect"]
+    category: Literal["facts", "evidence", "risk_assessment", "style", "other"]
+    comment: str = Field(min_length=5, max_length=1000)
+
+
+class DriftAlertActionRequest(BaseModel):
+    action: Literal["acknowledged", "investigating", "false_positive"]
+    comment: str = Field(min_length=5, max_length=1000)

@@ -1,6 +1,6 @@
 # 生产运行：规则、数据中台、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v0.7 提供六条可独立测试、但在生产共同受控的链路：政策规则发布生命周期、信贷数据中台、受控任务规划、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
+FinCredit Copilot v0.8 提供六条可独立测试、但在生产共同受控的链路：政策规则发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -33,6 +33,8 @@ FINCREDIT_DRIFT_MAX_FALLBACK_RATE=0.2
 FINCREDIT_DRIFT_MAX_P95_LATENCY_MS=5000
 FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE=0.9
 FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE=0.95
+FINCREDIT_AGENT_CONTEXT_MAX_CHARS=12000
+FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS=168
 ```
 
 不要把密钥或带密码的连接串提交到 Git。应由 Secret Manager、Kubernetes Secret 或同等受控设施注入。
@@ -86,11 +88,11 @@ FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE=0.95
 
 ## 任务规划、最小化上下文与线上评估
 
-`app/task_planner.py` 不把工具选择交给模型。它针对 `generate_brief` 和 `answer_question` 生成版本化依赖图：读取申请、数据中台规范客户画像、材料、政策证据、确定性规则、RAG、结构化输出和人工边界；仅问题涉及审批流程时才加入审批状态工具。计划及完成轨迹写入 `agent_runs.input_snapshot_json`，用于审计、恢复和线上评估。
+`app/task_planner.py` 不把工具选择交给模型。它针对 `generate_brief` 和 `answer_question` 生成版本化依赖图：读取申请、数据中台规范客户画像、材料、政策证据、上下文质量检查、确定性规则、RAG、结构化输出和人工边界；仅问题涉及审批流程时才加入审批状态工具。计划及完成轨迹写入 `agent_runs.input_snapshot_json`，用于审计、恢复和线上评估。
 
-数据中台工具根据申请创建人的组织读取当前客户规范记录，只返回行业、经营年限、营收、负债率、逾期天数和信用等级等批准字段，以及哈希/时间元数据。注册号、姓名等标识字段和任何 `restricted` 数据不会发送给外部模型。该工具只提供辅助上下文，当前确定性准入规则仍以受控业务库为权威来源，避免未经业务确认的数据覆盖审批依据。
+数据中台工具根据申请创建人的组织读取当前客户规范记录，只返回行业、经营年限、营收、负债率、逾期天数和信用等级等批准字段，以及哈希/时间元数据。注册号、姓名等标识字段和任何 `restricted` 数据不会发送给外部模型。模型调用前会生成独立上下文副本，并以 `FINCREDIT_AGENT_CONTEXT_MAX_CHARS` 强制限制序列化字符数；超额证据文本会截断但不丢失证据 ID。中台记录按 `FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS` 标注时效，并输出跨源字段冲突名称，供复核人判断。该工具只提供辅助上下文，当前确定性准入规则仍以受控业务库为权威来源，避免未经业务确认的数据覆盖审批依据。
 
-每个完成的 Agent Run 会自动计算：降级率、P95 延迟、证据覆盖、规划一致性和自动决策边界词命中率。合规管理员在稳定的生产观察窗口后调用 `POST /v1/observability/online-evaluation/baselines` 固化基线；调用 `POST /v1/observability/online-evaluation/assess` 可立即比对基线并创建/恢复告警。接口如下：
+每个完成的 Agent Run 会自动计算：降级率、P95 延迟、证据覆盖、规划一致性、自动决策边界词命中率，以及已提交人工复核的覆盖/采纳/修订率。合规管理员在稳定的生产观察窗口后调用 `POST /v1/observability/online-evaluation/baselines` 固化基线；调用 `POST /v1/observability/online-evaluation/assess` 可立即比对基线并创建/恢复告警。接口如下：
 
 | API | 作用 |
 | --- | --- |
@@ -98,6 +100,8 @@ FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE=0.95
 | `POST /v1/observability/online-evaluation/baselines` | 使用最近达标样本建立基线 |
 | `POST /v1/observability/online-evaluation/assess` | 评估并同步持久化漂移告警 |
 | `GET /v1/observability/drift-alerts` | 查询打开或已恢复的告警 |
+| `GET/POST /v1/applications/{application_id}/agent-runs/{run_id}/feedback` | 查询或提交 Run 的结构化人工复核 |
+| `GET/POST /v1/observability/drift-alerts/{alert_id}/actions` | 查询或追加告警处置历史 |
 
 本地 SQLite 告警适合演示和回归。生产中应将指标/告警导出到 Prometheus、OpenTelemetry、SIEM 或企业告警平台，并结合值班、SLO、事件响应和人工复核。不能因为数据量不足、没有基线或评估 API 正常响应，就将模型声明为“无漂移”。
 

@@ -113,8 +113,32 @@ def scenario_business_question_is_answered_and_traced() -> None:
         "get_application_snapshot", "get_canonical_customer_snapshot", "get_material_status",
         "get_policy_evidence", "get_approval_status",
     ]
-    assert input_snapshot["task_plan"]["version"] == "v1"
+    assert input_snapshot["task_plan"]["version"] == "v2"
     assert all(step["status"] == "completed" for step in input_snapshot["plan_execution"])
+    governance = input_snapshot["context_governance"]
+    assert governance["used_chars"] <= governance["max_chars"]
+
+
+def scenario_human_feedback_is_traced_and_measured() -> None:
+    response = client.post(
+        "/v1/applications/APP001/agent-question", headers={"X-User-Id": "rm_001"},
+        json={"question": "下一步如何处理？"},
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["answer"]["run_id"]
+    feedback = client.post(
+        f"/v1/applications/APP001/agent-runs/{run_id}/feedback", headers={"X-User-Id": "rm_001"},
+        json={"verdict": "needs_revision", "category": "evidence", "comment": "需要补充对应的政策条款依据。"},
+    )
+    assert feedback.status_code == 201, feedback.text
+    history = client.get(
+        f"/v1/applications/APP001/agent-runs/{run_id}/feedback", headers={"X-User-Id": "compliance_001"},
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()["items"][0]["content_hash"]
+    metrics = client.get("/v1/observability/online-evaluation", headers={"X-User-Id": "compliance_001"})
+    assert metrics.status_code == 200, metrics.text
+    assert metrics.json()["observed"]["feedback_count"] >= 1
 
 
 def scenario_observability_metrics_track_agent_health() -> None:
@@ -207,6 +231,7 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("high_risk_requires_override_reason", scenario_high_risk_requires_override_reason),
     ("agent_output_stays_within_governance_boundary", scenario_agent_output_stays_within_governance_boundary),
     ("business_question_is_answered_and_traced", scenario_business_question_is_answered_and_traced),
+    ("human_feedback_is_traced_and_measured", scenario_human_feedback_is_traced_and_measured),
     ("observability_metrics_track_agent_health", scenario_observability_metrics_track_agent_health),
     ("approval_separation_of_duties", scenario_approval_separation_of_duties),
     ("policy_rule_four_eyes_lifecycle", scenario_policy_rule_four_eyes_lifecycle),

@@ -47,3 +47,22 @@ def test_agent_can_read_minimized_canonical_customer_context() -> None:
         "industry": "通用设备制造", "operating_years": 6, "annual_revenue": 18_500_000, "debt_ratio": 0.52,
     }
     assert "name" not in canonical["fields"]
+    assert canonical["freshness"] == "fresh"
+    assert canonical["conflicting_fields"] == []
+
+
+def test_canonical_context_marks_stale_records_and_cross_source_conflicts(monkeypatch) -> None:
+    monkeypatch.setenv("FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS", "0")
+    ingest_records(
+        source_system="crm", contract_id="DC-CRM-CUSTOMER", organization_id="branch-shanghai", actor_id="compliance_001",
+        records=[{
+            "customer_id": "C001", "name": "华辰设备制造有限公司", "operating_years": 6,
+            "annual_revenue": 18_500_000, "debt_ratio": 0.60, "industry": "通用设备制造",
+        }],
+    )
+    canonical = next(
+        item["result"] for item in execute_agent_tools(application())
+        if item["tool_name"] == "get_canonical_customer_snapshot"
+    )
+    assert canonical["freshness"] == "stale"
+    assert canonical["conflicting_fields"] == ["debt_ratio"]

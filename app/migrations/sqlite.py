@@ -144,6 +144,20 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_drift_one_open_signal ON agent_drift_alerts(signal) WHERE status = 'open'",
         "CREATE INDEX IF NOT EXISTS idx_agent_drift_status ON agent_drift_alerts(status, last_detected_at DESC)",
     )),
+    ("0009_human_feedback_and_context_governance", (
+        """CREATE TABLE IF NOT EXISTS agent_feedback (
+            id TEXT PRIMARY KEY, run_id TEXT NOT NULL, application_id TEXT NOT NULL,
+            verdict TEXT NOT NULL, category TEXT NOT NULL, comment TEXT NOT NULL,
+            content_hash TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_feedback_one_per_reviewer ON agent_feedback(run_id, created_by)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_feedback_run ON agent_feedback(run_id, created_at DESC)",
+        """CREATE TABLE IF NOT EXISTS agent_drift_alert_actions (
+            id TEXT PRIMARY KEY, alert_id TEXT NOT NULL, action TEXT NOT NULL,
+            comment TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_agent_drift_alert_actions_alert ON agent_drift_alert_actions(alert_id, created_at DESC)",
+    )),
 )
 
 

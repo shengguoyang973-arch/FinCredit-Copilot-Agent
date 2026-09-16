@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 
 
-PLANNER_VERSION = "v1"
+PLANNER_VERSION = "v2"
 SUPPORTED_TASKS = frozenset({"generate_brief", "answer_question"})
 
 
@@ -87,7 +87,8 @@ def build_task_plan(task: str, question: str | None = None) -> TaskPlan:
             "approval_status", "读取当前人工审批状态", "tool", ("application_snapshot",), "get_approval_status",
         ))
     controls = [
-        PlanStep("deterministic_controls", "执行确定性准入与风险规则", "system", tuple(step.id for step in tools)),
+        PlanStep("context_quality", "检查模型上下文预算、数据时效与跨源字段冲突", "system", tuple(step.id for step in tools)),
+        PlanStep("deterministic_controls", "执行确定性准入与风险规则", "system", ("context_quality",)),
         PlanStep("rag_retrieval", "检索带引用的政策上下文", "system", ("deterministic_controls",)),
         PlanStep("structured_response", "生成受 schema 约束的辅助意见", "system", ("rag_retrieval",)),
         PlanStep("human_boundary", "保留人工审批边界，不执行授信决定", "governance", ("structured_response",)),

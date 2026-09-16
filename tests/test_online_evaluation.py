@@ -36,3 +36,14 @@ def test_baseline_and_drift_alerts_use_persisted_run_metrics(monkeypatch) -> Non
     listed = client.get("/v1/observability/drift-alerts", headers=COMPLIANCE)
     assert listed.status_code == 200
     assert {item["signal"] for item in listed.json()["items"]} == {"fallback_rate", "p95_latency_ms"}
+    alert_id = listed.json()["items"][0]["id"]
+    action = client.post(
+        f"/v1/observability/drift-alerts/{alert_id}/actions", headers=COMPLIANCE,
+        json={"action": "investigating", "comment": "已创建排查工单并核对模型服务日志。"},
+    )
+    assert action.status_code == 201
+    history = client.get(f"/v1/observability/drift-alerts/{alert_id}/actions", headers=COMPLIANCE)
+    assert history.status_code == 200
+    assert history.json()["items"][0]["action"] == "investigating"
+    missing = client.get("/v1/observability/drift-alerts/ADA-UNKNOWN/actions", headers=COMPLIANCE)
+    assert missing.status_code == 404

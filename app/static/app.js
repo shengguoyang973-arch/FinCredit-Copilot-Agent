@@ -196,6 +196,63 @@ async function uploadMaterial() {
   });
 }
 
+function contextGovernanceMarkup(context) {
+  if (!context || !context.max_chars) return "";
+  const canonical = context.canonical_data || {};
+  const freshness = { fresh: "最新", stale: "已过期", unknown: "未知" }[canonical.freshness] || "未接入";
+  const conflicts = (canonical.conflicting_fields || []).join("、") || "无";
+  return `<p class="context-note">受控上下文：${escapeHtml(context.used_chars || 0)}/${escapeHtml(context.max_chars)} 字符；数据中台：${escapeHtml(freshness)}；跨源字段冲突：${escapeHtml(conflicts)}。</p>`;
+}
+
+function feedbackForm(runId) {
+  if (!runId) return "";
+  return `
+    <div class="feedback-form" data-feedback-form data-run-id="${escapeHtml(runId)}">
+      <strong>人工复核反馈</strong>
+      <select data-feedback-verdict aria-label="复核结论">
+        <option value="accepted">可接受</option>
+        <option value="needs_revision">需修订</option>
+        <option value="incorrect">不正确</option>
+      </select>
+      <select data-feedback-category aria-label="问题分类">
+        <option value="facts">事实</option>
+        <option value="evidence">证据</option>
+        <option value="risk_assessment">风险判断</option>
+        <option value="style">表达</option>
+        <option value="other">其他</option>
+      </select>
+      <input data-feedback-comment maxlength="1000" placeholder="填写至少 5 个字的复核意见（仅用于质量改进）">
+      <button data-feedback-submit class="secondary">提交反馈</button>
+    </div>`;
+}
+
+async function submitAgentFeedback(button) {
+  const form = button.closest("[data-feedback-form]");
+  const runId = form?.dataset.runId;
+  const comment = form?.querySelector("[data-feedback-comment]")?.value?.trim();
+  if (!runId || !comment || comment.length < 5) return toast("请填写至少 5 个字的复核意见。", true);
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "提交中…";
+  try {
+    const feedback = await api(`/v1/applications/${state.applicationId}/agent-runs/${runId}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({
+        verdict: form.querySelector("[data-feedback-verdict]").value,
+        category: form.querySelector("[data-feedback-category]").value,
+        comment,
+      }),
+    });
+    form.innerHTML = `<span class="context-note">${escapeHtml(feedback.message)}，反馈编号：${escapeHtml(feedback.feedback.id)}</span>`;
+    toast("人工复核反馈已纳入线上质量指标。");
+    await loadMetrics();
+  } catch (error) {
+    toast(error.message, true);
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 function renderReport(report) {
   const findings = report.findings.map(f => `
     <div class="finding ${escapeHtml(f.severity)}">
@@ -212,7 +269,9 @@ function renderReport(report) {
         <div><strong>关键风险</strong><ul>${report.agent_brief.key_risks.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>
         <div><strong>建议动作</strong><ul>${report.agent_brief.next_actions.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>
       </div>
+      ${contextGovernanceMarkup(report.agent_brief.context_governance)}
       <p class="empty">${escapeHtml(report.agent_brief.governance_note)}</p>
+      ${feedbackForm(report.agent_brief.run_id)}
     </div>` : "";
   document.querySelector("#report-content").innerHTML = `
     <p><strong>结论：${escapeHtml(report.conclusion)}</strong></p>
@@ -268,7 +327,9 @@ function renderAgentAnswer(data) {
         <div><strong>建议动作</strong><ul>${(answer.follow_up_actions || []).map(item => `<li>${escapeHtml(item)}</li>`).join("") || "<li>由人工复核。</li>"}</ul></div>
       </div>
       ${answer.fallback_reason ? `<p class="missing">${escapeHtml(answer.fallback_reason)}</p>` : ""}
+      ${contextGovernanceMarkup(answer.context_governance)}
       <p class="empty">${escapeHtml(answer.governance_note)}</p>
+      ${feedbackForm(answer.run_id)}
     </div>`;
   pulse(".agent-chat");
 }
@@ -333,7 +394,7 @@ function renderMetrics(metrics) {
       <div><h3>模型服务分布</h3><ul>${providers}</ul></div>
     </div>
     <div class="observability-grid">
-      <div><h3>线上质量评估</h3><p>状态：${escapeHtml(onlineStatus)}；样本：${escapeHtml(observed.sample_count ?? 0)}；证据覆盖：${escapeHtml(((observed.evidence_coverage || 0) * 100).toFixed(1))}%</p></div>
+      <div><h3>线上质量评估</h3><p>状态：${escapeHtml(onlineStatus)}；样本：${escapeHtml(observed.sample_count ?? 0)}；证据覆盖：${escapeHtml(((observed.evidence_coverage || 0) * 100).toFixed(1))}%；人工反馈覆盖：${escapeHtml(((observed.feedback_coverage || 0) * 100).toFixed(1))}%</p></div>
       <div><h3>规划一致性</h3><p>任务规划与实际工具执行：${escapeHtml(observed.plan_adherence_rate == null ? "待采样" : `${(observed.plan_adherence_rate * 100).toFixed(1)}%`)}</p></div>
     </div>
     <div class="table-wrap">
@@ -437,6 +498,9 @@ document.querySelector("#agent-question").addEventListener("keydown", event => {
 document.querySelector("#load-metrics").addEventListener("click", loadMetrics);
 document.querySelector("#submit").addEventListener("click", submit);
 document.querySelector("#upload-material").addEventListener("click", uploadMaterial);
+document.addEventListener("click", event => {
+  if (event.target.matches("[data-feedback-submit]")) submitAgentFeedback(event.target);
+});
 document.querySelector("#refresh").addEventListener("click", () => {
   loadApplication();
   loadMaterials();

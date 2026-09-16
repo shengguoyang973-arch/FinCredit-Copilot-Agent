@@ -32,7 +32,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.7.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.8.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -66,6 +66,8 @@ def test_workbench_escapes_dynamic_frontend_content() -> None:
     assert "loadingMarkup" in script
     assert "/v1/observability/agent-metrics" in script
     assert "renderMetrics" in script
+    assert "feedbackForm" in script
+    assert "contextGovernanceMarkup" in script
     assert 'pending_approval: "待审批"' in script
 
 
@@ -107,6 +109,7 @@ def test_risk_manager_can_pre_review() -> None:
     assert body["agent_brief"]["run_id"].startswith("AGT-")
     assert "不自动批准" in body["agent_brief"]["governance_note"]
     assert body["agent_brief"]["evidence_ids"] == ["POL-1.2", "POL-2.1", "POL-3.4"]
+    assert body["agent_brief"]["context_governance"]["used_chars"] <= body["agent_brief"]["context_governance"]["max_chars"]
 
 
 def test_account_manager_cannot_pre_review() -> None:
@@ -155,10 +158,39 @@ def test_agent_runs_are_persisted_and_queryable() -> None:
         "get_application_snapshot", "get_canonical_customer_snapshot", "get_material_status", "get_policy_evidence"
     ]
     assert item["input_snapshot"]["tool_count"] == 4
-    assert item["input_snapshot"]["task_plan"]["version"] == "v1"
+    assert item["input_snapshot"]["task_plan"]["version"] == "v2"
+    assert item["input_snapshot"]["context_governance"]["used_chars"] <= item["input_snapshot"]["context_governance"]["max_chars"]
     assert all(step["status"] == "completed" for step in item["input_snapshot"]["plan_execution"])
     assert item["input_snapshot"]["duration_ms"] >= 0
     assert item["output"]["summary"].startswith("华辰设备制造有限公司申请流动资金授信")
+
+
+def test_human_feedback_is_persisted_once_per_reviewer_and_feeds_online_metrics() -> None:
+    run = client.post(
+        "/v1/applications/APP001/agent-question", headers={"X-User-Id": "rm_001"}, json={"question": "下一步应如何处理？"},
+    )
+    assert run.status_code == 200
+    run_id = run.json()["answer"]["run_id"]
+    feedback = client.post(
+        f"/v1/applications/APP001/agent-runs/{run_id}/feedback", headers={"X-User-Id": "rm_001"},
+        json={"verdict": "needs_revision", "category": "risk_assessment", "comment": "风险结论需要补充材料依据。"},
+    )
+    assert feedback.status_code == 201
+    assert feedback.json()["feedback"]["content_hash"]
+    duplicate = client.post(
+        f"/v1/applications/APP001/agent-runs/{run_id}/feedback", headers={"X-User-Id": "rm_001"},
+        json={"verdict": "accepted", "category": "facts", "comment": "重复提交应被拒绝。"},
+    )
+    assert duplicate.status_code == 409
+    listed = client.get(
+        f"/v1/applications/APP001/agent-runs/{run_id}/feedback", headers={"X-User-Id": "compliance_001"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["verdict"] == "needs_revision"
+    metrics = client.get("/v1/observability/online-evaluation", headers={"X-User-Id": "compliance_001"})
+    assert metrics.status_code == 200
+    assert metrics.json()["observed"]["feedback_count"] == 1
+    assert metrics.json()["observed"]["human_correction_rate"] == 1.0
 
 
 def test_completed_agent_run_cannot_be_resumed() -> None:

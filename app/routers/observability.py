@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.domain import Role, User
+from app.human_feedback import drift_alert_exists, list_drift_alert_actions, record_drift_alert_action
 from app.metrics import agent_metrics
 from app.online_evaluation import (
     assess_and_sync_alerts,
@@ -13,7 +14,7 @@ from app.online_evaluation import (
     online_evaluation_report,
 )
 from app.repository import audit
-from app.schemas import OnlineEvaluationBaselineRequest
+from app.schemas import DriftAlertActionRequest, OnlineEvaluationBaselineRequest
 from app.security import require_roles
 
 router = APIRouter(prefix="/v1/observability", tags=["observability"])
@@ -63,3 +64,28 @@ def drift_alerts(
     items = list_drift_alerts(status=alert_status, limit=limit)
     audit("agent_drift_alerts_viewed", user.id, "agent_online_evaluation", status=alert_status, result_count=len(items))
     return {"items": items}
+
+
+@router.get("/drift-alerts/{alert_id}/actions")
+def drift_alert_actions(alert_id: str, user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN))) -> dict:
+    if not drift_alert_exists(alert_id):
+        raise HTTPException(status_code=404, detail="漂移告警不存在")
+    items = list_drift_alert_actions(alert_id)
+    audit("agent_drift_alert_actions_viewed", user.id, alert_id, result_count=len(items))
+    return {"alert_id": alert_id, "items": items}
+
+
+@router.post("/drift-alerts/{alert_id}/actions", status_code=status.HTTP_201_CREATED)
+def add_drift_alert_action(
+    alert_id: str,
+    body: DriftAlertActionRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        item = record_drift_alert_action(
+            alert_id=alert_id, action=body.action, comment=body.comment, actor_id=user.id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    audit("agent_drift_alert_action_recorded", user.id, alert_id, alert_action=item["action"])
+    return {"message": "漂移告警处置已记录", "action": item}

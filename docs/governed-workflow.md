@@ -2,7 +2,7 @@
 
 ## 身份与访问边界
 
-FinCredit Copilot v0.7 只接受 `demo-header` 与 `oidc` 两个显式身份提供方。拼写错误或未知 Provider 会返回 `503`，不会退回演示用户表。OIDC 模式要求标准 `Authorization: Bearer <token>`，根据 JWT Header 的 `kid` 从企业 JWKS 选择公钥，并同时校验算法白名单、签发方、受众、签名、有效期和必需声明。
+FinCredit Copilot v0.8 只接受 `demo-header` 与 `oidc` 两个显式身份提供方。拼写错误或未知 Provider 会返回 `503`，不会退回演示用户表。OIDC 模式要求标准 `Authorization: Bearer <token>`，根据 JWT Header 的 `kid` 从企业 JWKS 选择公钥，并同时校验算法白名单、签发方、受众、签名、有效期和必需声明。
 
 设置 `FINCREDIT_ENVIRONMENT=production` 时，`GET /ready` 会拒绝 `demo-header`，并要求正式 Embedding 与 pgvector。只有 Token 中映射到项目业务角色且带有效组织声明的身份才会进入授权层。风险经理与审批人只能访问申请创建人所属组织的数据，合规管理员保留全局审计权限；客户经理只能访问本人创建的申请。
 

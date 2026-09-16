@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.7.0"
+    app_version: str = "0.8.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -30,6 +30,8 @@ class Settings:
     drift_max_p95_latency_ms: float = 5_000.0
     drift_min_evidence_coverage: float = 0.9
     drift_min_plan_adherence: float = 0.95
+    agent_context_max_chars: int = 12_000
+    canonical_data_max_age_hours: float = 168.0
     rag_top_k: int = 3
     rag_lexical_weight: float = 0.85
     rag_vector_weight: float = 0.15
@@ -91,6 +93,12 @@ def get_settings() -> Settings:
         )),
         drift_min_plan_adherence=float(os.getenv(
             "FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE", str(Settings.drift_min_plan_adherence)
+        )),
+        agent_context_max_chars=int(os.getenv(
+            "FINCREDIT_AGENT_CONTEXT_MAX_CHARS", str(Settings.agent_context_max_chars)
+        )),
+        canonical_data_max_age_hours=float(os.getenv(
+            "FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS", str(Settings.canonical_data_max_age_hours)
         )),
         rag_top_k=int(os.getenv("FINCREDIT_RAG_TOP_K", str(Settings.rag_top_k))),
         rag_lexical_weight=float(os.getenv("FINCREDIT_RAG_LEXICAL_WEIGHT", str(Settings.rag_lexical_weight))),
@@ -191,6 +199,10 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE 必须在 0 到 1 之间")
     if not 0 <= settings.drift_min_plan_adherence <= 1:
         errors.append("FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE 必须在 0 到 1 之间")
+    if not 2_000 <= settings.agent_context_max_chars <= 100_000:
+        errors.append("FINCREDIT_AGENT_CONTEXT_MAX_CHARS 必须在 2000 到 100000 之间")
+    if settings.canonical_data_max_age_hours < 0:
+        errors.append("FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS 不能小于 0")
     if not 1 <= settings.rag_top_k <= 50:
         errors.append("FINCREDIT_RAG_TOP_K 必须在 1 到 50 之间")
     if settings.rag_lexical_weight < 0 or settings.rag_vector_weight < 0:
