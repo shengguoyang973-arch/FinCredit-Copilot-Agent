@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.5.0"
+    app_version: str = "0.6.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -23,6 +23,7 @@ class Settings:
     agent_circuit_failure_threshold: int = 3
     agent_circuit_cooldown_seconds: float = 30.0
     max_document_bytes: int = 2_000_000
+    data_platform_max_batch_records: int = 500
     rag_top_k: int = 3
     rag_lexical_weight: float = 0.85
     rag_vector_weight: float = 0.15
@@ -66,6 +67,9 @@ def get_settings() -> Settings:
         agent_circuit_failure_threshold=int(os.getenv("FINCREDIT_AGENT_CIRCUIT_FAILURE_THRESHOLD", str(Settings.agent_circuit_failure_threshold))),
         agent_circuit_cooldown_seconds=float(os.getenv("FINCREDIT_AGENT_CIRCUIT_COOLDOWN_SECONDS", str(Settings.agent_circuit_cooldown_seconds))),
         max_document_bytes=max_document_bytes,
+        data_platform_max_batch_records=int(os.getenv(
+            "FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS", str(Settings.data_platform_max_batch_records)
+        )),
         rag_top_k=int(os.getenv("FINCREDIT_RAG_TOP_K", str(Settings.rag_top_k))),
         rag_lexical_weight=float(os.getenv("FINCREDIT_RAG_LEXICAL_WEIGHT", str(Settings.rag_lexical_weight))),
         rag_vector_weight=float(os.getenv("FINCREDIT_RAG_VECTOR_WEIGHT", str(Settings.rag_vector_weight))),
@@ -151,6 +155,8 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("FINCREDIT_AGENT_MAX_RETRIES 不能小于 0")
     if settings.max_document_bytes <= 0:
         errors.append("FINCREDIT_MAX_DOCUMENT_BYTES 必须大于 0")
+    if not 1 <= settings.data_platform_max_batch_records <= 10_000:
+        errors.append("FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS 必须在 1 到 10000 之间")
     if not 1 <= settings.rag_top_k <= 50:
         errors.append("FINCREDIT_RAG_TOP_K 必须在 1 到 50 之间")
     if settings.rag_lexical_weight < 0 or settings.rag_vector_weight < 0:

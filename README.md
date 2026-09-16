@@ -2,7 +2,7 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.5 在 LangChain、pgvector 与企业 OIDC 基础上，进一步加入政策规则草稿、四眼复核、计划生效、内容哈希锁定和受控回滚生命周期；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.6 在 LangChain、pgvector、企业 OIDC 和政策规则发布治理基础上，加入系统化信贷数据中台：数据契约目录、受控批次接入、确定性质量校验、组织隔离的规范数据服务和可验证血缘链；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -13,6 +13,8 @@ LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/la
 生产 RAG、规则配置和 OIDC 部署说明见 [docs/production-runtime.md](docs/production-runtime.md)。
 
 规则发布状态机、复核 API 和回滚流程见 [docs/policy-rule-lifecycle.md](docs/policy-rule-lifecycle.md)。
+
+数据中台的数据契约、接入、质量、数据服务和血缘接口见 [docs/data-platform.md](docs/data-platform.md)。
 
 API 已按领域拆分到 `app/routers/`，`main.py` 只负责应用装配、静态工作台和路由注册。
 
@@ -34,6 +36,9 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 - 带版本与条款号的授信政策检索
 - SQLite 持久化政策库；合规管理员可通过接口新增或更新政策条款
 - 政策规则发布治理：四类白名单规则、不可变草稿、作者/复核人分离、结构化版本 diff、计划生效、哈希锁定与受控回滚
+- 信贷数据中台：客户/授信申请标准数据契约目录、版本不可覆盖、来源系统白名单和契约内容哈希
+- 受控数据接入：批次仅保存数据指纹，先执行必填字段、类型一致性、业务键去重校验；失败批次保留回执但绝不发布规范记录
+- 规范数据服务与治理：按组织隔离查询当前版本数据、保留历史版本，独立 SHA-256 血缘链和全局审计链均可验证
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -89,6 +94,7 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 - `FINCREDIT_AGENT_PROVIDER_CHAIN`：Provider 路由链，例如 `deepseek-chat,deterministic-local`。
 - `FINCREDIT_INPUT_COST_PER_1K_USD` / `FINCREDIT_OUTPUT_COST_PER_1K_USD`：Token 成本估算单价；不配置时只统计 Token，不虚构成本。
 - `FINCREDIT_MAX_DOCUMENT_BYTES`：单个材料上传字节上限，默认 `2000000`。
+- `FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS`：一次受控接入批次可提交的最多记录数，默认 `500`，范围 `1` 到 `10000`。
 - `FINCREDIT_RAG_TOP_K`：RAG 返回条款数量，调优默认值为 `3`。
 - `FINCREDIT_RAG_LEXICAL_WEIGHT`：词法召回权重，调优默认值为 `0.85`。
 - `FINCREDIT_RAG_VECTOR_WEIGHT`：向量召回权重，调优默认值为 `0.15`。
@@ -118,6 +124,20 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 ```
 
 本项目采用“配置化确定性规则 + RAG 证据 + LangChain 模型表达”的分层设计。额度、准入和提交拦截不交给大模型决定；LangChain 负责受控上下文编排和结构化生成。开发默认使用确定性哈希向量和内存库，生产路径使用 OpenAI Embedding 与 pgvector，并在政策内容、切分或向量配置变化时刷新索引。
+
+## 数据中台数据流
+
+```text
+CRM / 核心信贷 / 风险引擎（受控服务身份）
+  -> 数据契约目录：业务键、必填字段、字段类型、数据分级、来源白名单
+  -> 接入批次：仅计算规范 JSON 的 SHA-256 指纹，不在审计中复制原始载荷
+  -> 数据质量：完整性、类型一致性、批内业务键唯一性
+  -> accepted：版本化规范数据 + 血缘哈希链 + 全局审计链
+  -> rejected：质量结果和血缘回执，零规范记录发布
+  -> 组织隔离数据 API -> 授信审批、风险分析、Agent 只读工具（后续接入）
+```
+
+数据中台不以“把所有数据复制到一个数据库”为目标。每次接入必须绑定一份生效数据契约和授权来源；成功记录按 `组织 + 实体类型 + 业务键` 维护当前规范视图，同时保留历史版本。当前实现提供 SQLite 本地适配器以便演示和回归测试；生产应迁移到受管 PostgreSQL、对象存储和企业调度/CDC 平台，详见 [数据中台说明](docs/data-platform.md)。
 
 真实大模型模式示例：
 
@@ -195,13 +215,14 @@ Agent 当前白名单工具包括：`get_application_snapshot`、`get_material_s
 
 ## 重要边界
 
-本项目使用完全模拟、脱敏的数据。当前 SQLite 哈希链能够发现修改，但不等同于外部 WORM/不可变存储。OIDC/JWKS 与 pgvector 已提供正式适配，但生产接入前仍须把本地业务仓储替换为受控数据服务，并完成密钥管理、DLP、不可篡改日志平台和企业 IdP 联调。
+本项目使用完全模拟、脱敏的数据。当前 SQLite 的审计和数据血缘哈希链能够发现修改，但不等同于外部 WORM/不可变存储；数据质量仅覆盖契约完整性、类型和批内业务键，并不替代企业级 DQ、主数据、反洗钱或征信核验。OIDC/JWKS 与 pgvector 已提供正式适配，但生产接入前仍须把本地业务仓储和数据中台适配器迁到受控数据服务，并完成密钥管理、DLP、不可篡改日志平台和企业 IdP 联调。
 
 ## 生产上线清单
 
 - 在预生产环境联调企业 SSO/OIDC JWKS 轮换、签发方、受众、Token 时钟偏差与撤销策略；生产环境不得启用演示身份头。
 - 接入受管对象存储、恶意文件扫描、OCR/版面解析与文档保留策略；不得把未脱敏材料直接发送给外部模型。
 - 替换 SQLite 为支持事务隔离和行锁的受管数据库；将本地防篡改哈希链复制到 WORM/SIEM，并配置备份、告警和灾备。
+- 将数据中台迁移到受管 PostgreSQL/湖仓与对象存储，接入企业 CDC 或编排器、模式注册表、数据目录、血缘平台、质量告警、保留/删除策略和主数据治理；不要把生产源数据通过演示 HTTP 批量接口直接导入。
 - 以脱敏、标注过的真实案例建立评测集，覆盖事实准确率、工具调用失败率、越权率、拒答率、延迟与成本。
 - 将 RAG 演示评测集扩展为经合规审批的训练集、验证集和时间外测试集，并为每次参数或模型变更保存版本和回滚点。
 - 将核心、征信、CRM 和 OA 系统接入限制为最小权限的受控工具；任何高风险写操作均保留人工确认。

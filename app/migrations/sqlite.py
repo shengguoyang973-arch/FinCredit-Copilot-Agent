@@ -85,6 +85,50 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "ALTER TABLE policy_rules ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_policy_rules_one_scheduled ON policy_rules(id) WHERE status = 'scheduled'",
     )),
+    ("0007_data_platform", (
+        """CREATE TABLE IF NOT EXISTS data_contracts (
+            id TEXT NOT NULL, version TEXT NOT NULL, domain_name TEXT NOT NULL,
+            entity_type TEXT NOT NULL, schema_json TEXT NOT NULL,
+            classification TEXT NOT NULL, description TEXT NOT NULL,
+            allowed_sources_json TEXT NOT NULL, status TEXT NOT NULL,
+            owner_id TEXT NOT NULL, contract_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (id, version)
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_data_contracts_one_active ON data_contracts(id) WHERE status = 'active'",
+        "CREATE INDEX IF NOT EXISTS idx_data_contracts_catalog ON data_contracts(status, domain_name, entity_type)",
+        """CREATE TABLE IF NOT EXISTS data_ingestion_batches (
+            id TEXT PRIMARY KEY, source_system TEXT NOT NULL, contract_id TEXT NOT NULL,
+            contract_version TEXT NOT NULL, organization_id TEXT NOT NULL,
+            status TEXT NOT NULL, payload_hash TEXT NOT NULL, record_count INTEGER NOT NULL,
+            accepted_count INTEGER NOT NULL, rejected_count INTEGER NOT NULL,
+            submitted_by TEXT NOT NULL, submitted_at TEXT NOT NULL, finalized_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_data_batches_contract ON data_ingestion_batches(contract_id, submitted_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_data_batches_organization ON data_ingestion_batches(organization_id, submitted_at DESC)",
+        """CREATE TABLE IF NOT EXISTS data_quality_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL,
+            rule_code TEXT NOT NULL, severity TEXT NOT NULL, passed INTEGER NOT NULL,
+            affected_records INTEGER NOT NULL, detail_json TEXT NOT NULL, executed_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_data_quality_batch ON data_quality_results(batch_id, id)",
+        """CREATE TABLE IF NOT EXISTS data_records (
+            id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, organization_id TEXT NOT NULL,
+            entity_type TEXT NOT NULL, business_key TEXT NOT NULL, record_json TEXT NOT NULL,
+            record_hash TEXT NOT NULL, classification TEXT NOT NULL, is_current INTEGER NOT NULL DEFAULT 1,
+            ingested_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_data_records_current ON data_records(organization_id, entity_type, business_key, is_current)",
+        "CREATE INDEX IF NOT EXISTS idx_data_records_batch ON data_records(batch_id)",
+        """CREATE TABLE IF NOT EXISTS data_lineage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL,
+            event_type TEXT NOT NULL, source_system TEXT NOT NULL, target_dataset TEXT NOT NULL,
+            contract_id TEXT NOT NULL, contract_version TEXT NOT NULL, payload_hash TEXT NOT NULL,
+            record_count INTEGER NOT NULL, actor_id TEXT NOT NULL, occurred_at TEXT NOT NULL,
+            prev_hash TEXT NOT NULL, event_hash TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_data_lineage_hash ON data_lineage_events(event_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_data_lineage_batch ON data_lineage_events(batch_id, id)",
+    )),
 )
 
 

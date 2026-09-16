@@ -1,6 +1,6 @@
-# 生产运行：规则、Embedding、pgvector 与 OIDC
+# 生产运行：规则、数据中台、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v0.5 提供四条可独立测试、但在生产共同受控的链路：政策规则发布生命周期、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
+FinCredit Copilot v0.6 提供五条可独立测试、但在生产共同受控的链路：政策规则发布生命周期、信贷数据中台、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -26,6 +26,7 @@ FINCREDIT_VECTOR_STORE_BACKEND=pgvector
 FINCREDIT_PGVECTOR_CONNECTION=postgresql+psycopg://user:password@host:5432/fincredit
 FINCREDIT_PGVECTOR_COLLECTION=fincredit_policy_chunks
 FINCREDIT_POLICY_TIMEZONE=Asia/Shanghai
+FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS=500
 ```
 
 不要把密钥或带密码的连接串提交到 Git。应由 Secret Manager、Kubernetes Secret 或同等受控设施注入。
@@ -46,6 +47,36 @@ FINCREDIT_POLICY_TIMEZONE=Asia/Shanghai
 待复核版本保存 canonical SHA-256；审批时重新计算并拒绝已被修改的内容。复核人可先读取结构化 diff。回滚不会直接重启历史记录，而是从已批准版本复制出带原因的新草稿，再完整走一遍四眼流程。详细 API 见 [政策规则发布生命周期](policy-rule-lifecycle.md)。
 
 发布前至少执行规则单元测试、脱敏回放和 `scripts/release_gate.py`。生产环境还应把计划生效扫描迁移到受监控的调度作业，并为逾期未审任务配置告警。
+
+## 信贷数据中台
+
+当前数据中台由数据控制面和数据服务面组成：
+
+- 控制面：合规管理员发布不可覆盖的 `数据契约 ID + 版本`。契约声明领域、实体类型、业务键、必填字段、字段类型、数据分级和允许来源系统；新版本会退役旧生效版本。
+- 接入面：`POST /v1/data-platform/ingestion-batches` 只接受绑定生效契约且来源在白名单中的批次。系统对载荷产生 SHA-256 指纹，执行完整性、类型一致性和批内业务键去重；任何失败都会拒绝整个批次，不发布部分记录。
+- 服务面：`GET /v1/data-platform/records/{entity_type}` 返回当前规范记录。风险经理和审批人只能读取所属组织，合规管理员可做全局治理查询。
+- 治理面：每个接入结果都写入质量回执、全局审计链和独立数据血缘哈希链。`GET /v1/data-platform/lineage/integrity` 可验证血缘链。
+
+演示接口用于验证契约与治理流程，不应作为生产源系统的大载荷导入通道。生产部署应使用服务账号（OIDC 映射到受控接入角色）、API Gateway、限流、幂等键和请求签名，采用 Kafka/CDC/ETL 编排器传输数据；将不可变原始层置于受管对象存储，将规范层/服务层置于受管 PostgreSQL 或湖仓。契约 API 继续作为 schema registry 的控制面，并与企业元数据目录、血缘、DQ 告警、主数据、保留与删除策略集成。
+
+最小的接入请求示例：
+
+```json
+{
+  "source_system": "crm",
+  "contract_id": "DC-CRM-CUSTOMER",
+  "organization_id": "branch-shanghai",
+  "records": [{
+    "customer_id": "C-1001",
+    "name": "示例企业",
+    "operating_years": 4,
+    "annual_revenue": 8500000,
+    "debt_ratio": 0.48
+  }]
+}
+```
+
+请求成功仅表示当前契约质量检查通过，不表示征信、反洗钱、制裁名单、主数据匹配或业务审批已经完成。
 
 ## Embedding 与向量索引
 

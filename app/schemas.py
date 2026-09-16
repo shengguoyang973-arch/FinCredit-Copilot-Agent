@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _validate_iso_date(value: str) -> str:
@@ -71,3 +71,67 @@ class ApprovalSubmissionRequest(BaseModel):
 
 class AgentQuestionRequest(BaseModel):
     question: str = Field(min_length=2, max_length=1000)
+
+
+class DataContractSchema(BaseModel):
+    """A deliberately small, JSON-compatible contract for canonical records."""
+
+    business_key: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    required_fields: list[str] = Field(min_length=1, max_length=100)
+    field_types: dict[str, str] = Field(min_length=1, max_length=100)
+
+    @field_validator("required_fields")
+    @classmethod
+    def required_fields_are_unique_and_safe(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("required_fields 不能包含重复字段")
+        if any(not field.replace("_", "").isalnum() or not field[0].isalpha() for field in values):
+            raise ValueError("required_fields 只能使用字母数字下划线字段名")
+        return values
+
+    @field_validator("field_types")
+    @classmethod
+    def field_types_are_supported(cls, values: dict[str, str]) -> dict[str, str]:
+        supported = {"string", "integer", "number", "boolean", "object", "array"}
+        if any(
+            not key.replace("_", "").isalnum() or not key[0].isalpha() or value not in supported
+            for key, value in values.items()
+        ):
+            raise ValueError("field_types 仅支持安全字段名和 string/integer/number/boolean/object/array 类型")
+        return values
+
+    @model_validator(mode="after")
+    def business_key_and_required_fields_must_be_declared(self) -> "DataContractSchema":
+        if self.business_key not in self.required_fields:
+            raise ValueError("business_key 必须包含在 required_fields 中")
+        if not set(self.required_fields).issubset(self.field_types):
+            raise ValueError("required_fields 必须全部在 field_types 中声明")
+        return self
+
+
+class DataContractUpsertRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(pattern=r"^DC-[A-Za-z0-9.-]{3,60}$")
+    version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    domain_name: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
+    entity_type: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    contract_schema: DataContractSchema = Field(alias="schema")
+    classification: Literal["internal", "confidential", "restricted"]
+    description: str = Field(min_length=10, max_length=500)
+    allowed_sources: list[str] = Field(min_length=1, max_length=30)
+
+    @field_validator("allowed_sources")
+    @classmethod
+    def allowed_sources_are_unique(cls, values: list[str]) -> list[str]:
+        normalized = [item.strip().lower() for item in values]
+        if any(not item or len(item) > 80 for item in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("allowed_sources 必须是唯一且非空的来源系统标识")
+        return normalized
+
+
+class DataIngestionRequest(BaseModel):
+    source_system: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,79}$")
+    contract_id: str = Field(pattern=r"^DC-[A-Za-z0-9.-]{3,60}$")
+    organization_id: str = Field(pattern=r"^[A-Za-z0-9_-]{2,80}$")
+    records: list[dict[str, Any]] = Field(min_length=1, max_length=10_000)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.config import get_settings, validate_settings
+from app.data_platform import healthcheck as data_platform_healthcheck
 from app.database import connection
 from app.vector_store import vector_store_healthcheck
 
@@ -26,10 +27,16 @@ def ready() -> dict:
         vector_store_healthcheck(settings)
     except Exception as error:
         errors.append(f"vector_store_unavailable:{type(error).__name__}")
+    try:
+        data_platform = data_platform_healthcheck()
+    except Exception as error:
+        data_platform = {"status": "unavailable"}
+        errors.append(f"data_platform_unavailable:{type(error).__name__}")
     if errors:
         raise HTTPException(status_code=503, detail={"status": "not_ready", "errors": errors})
     return {
         "status": "ready", "service": settings.service_name, "provider": settings.agent_provider,
         "embedding_provider": settings.embedding_provider, "vector_store": settings.vector_store_backend,
         "identity_provider": settings.identity_provider,
+        "data_platform": data_platform,
     }

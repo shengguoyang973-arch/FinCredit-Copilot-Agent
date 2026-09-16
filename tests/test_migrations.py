@@ -21,6 +21,11 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "agent_run_events",
         "application_documents",
         "policy_rules",
+        "data_contracts",
+        "data_ingestion_batches",
+        "data_quality_results",
+        "data_records",
+        "data_lineage_events",
     }
     assert expected.issubset(table_names())
 

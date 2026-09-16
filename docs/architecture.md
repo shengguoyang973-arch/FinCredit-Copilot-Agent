@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.5 adds a four-eyes policy-rule release lifecycle, scheduled activation, immutable review hashes, version diffs, and governed rollback to the LangChain/pgvector/OIDC workflow.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.6 adds a governed credit data platform: versioned data contracts, source allowlists, quality-gated ingestion batches, organization-scoped canonical-data APIs, and a separately verifiable lineage hash chain. It retains the v0.5 four-eyes policy-rule release lifecycle, LangChain/pgvector RAG, and OIDC workflow.
 
 ## Module Layout
 
@@ -19,6 +19,8 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/risk_rules.py`: Safe interpreters for admission, amount, threshold, and material rules; no dynamic code execution.
 - `app/embedding.py` / `app/vector_store.py`: Hash/OpenAI embedding adapters and memory/pgvector stores with persistent manifests.
 - `app/approval_policy.py`: Submission guardrail engine for missing materials, blocking rules, high-risk findings, and override reasons.
+- `app/data_platform.py`: Data-contract catalog, contract-hash lifecycle, source-authorized ingestion, deterministic data-quality checks, canonical-record history, and lineage-chain verification.
+- `app/routers/data_platform.py`: Data-platform catalog, contract publication, ingestion, canonical-data, batch, and lineage APIs with role/organization guardrails.
 - `app/agent_provider.py`: LangChain LCEL prompt/model/structured-output pipeline with local deterministic fallback, OpenAI Responses, and DeepSeek-compatible implementations.
 - `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
 - `app/prompt_registry.py`: Versioned governed prompts; every Agent Run records prompt identity and version.
@@ -37,20 +39,21 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 
 1. A user selects an application and role in the workbench.
 2. API routes authenticate the demo user with `X-User-Id` and enforce role permissions.
-3. Service orchestration loads application, customer, policy, and material status from stores.
-4. Separately, compliance authors create immutable rule drafts; another compliance actor reviews the diff and approves, rejects, or schedules the version.
-5. Due scheduled rules atomically retire the previous active version and extend the audit chain.
-6. The pre-review engine loads only active rule versions and produces deterministic findings plus their required policy IDs.
-7. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
-8. The tool allowlist supplies minimized, read-only business context without document body previews.
-9. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
-10. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
-11. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`.
-12. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
-13. The approval policy engine evaluates whether the application can be submitted.
-14. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
-15. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions; returned applications must be re-reviewed before resubmission.
-16. Audit writes extend a SHA-256 chain that compliance users can verify through the integrity endpoint.
+3. Upstream CRM, core-credit, or risk-engine integrations can first publish a data-contract-bound batch through the data platform; only accepted batches update canonical records.
+4. Service orchestration loads application, customer, policy, and material status from stores.
+5. Separately, compliance authors create immutable rule drafts; another compliance actor reviews the diff and approves, rejects, or schedules the version.
+6. Due scheduled rules atomically retire the previous active version and extend the audit chain.
+7. The pre-review engine loads only active rule versions and produces deterministic findings plus their required policy IDs.
+8. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
+9. The tool allowlist supplies minimized, read-only business context without document body previews.
+10. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
+11. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
+12. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`.
+13. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
+14. The approval policy engine evaluates whether the application can be submitted.
+15. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
+16. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions; returned applications must be re-reviewed before resubmission.
+17. Audit writes extend a SHA-256 chain; each data batch also extends a separate data-lineage chain that compliance users can verify.
 
 ## Current Guardrails
 
@@ -75,6 +78,10 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Pending approval tasks lock the pre-review report hash and reject decisions against changed evidence.
 - Unknown identity providers fail closed, and `/ready` rejects demo-header authentication in production.
 - OIDC validates the JWT signature by `kid` against cached JWKS keys and requires `exp`, `iat`, `iss`, `sub`, and `aud` claims.
+- Data contracts are immutable by ID/version, have canonical SHA-256 hashes, and can allow only explicit source-system identifiers; publishing a new version retires the preceding active version.
+- A data batch is accepted only when deterministic required-field, type-conformance, and duplicate-business-key checks all pass. Rejected batches retain only receipt/quality/lineage metadata and publish no canonical records.
+- Canonical data reads are organization-scoped for risk managers and approvers; compliance administrators can perform governance-wide reads. Batch metadata and lineage never include source payloads.
+- Data lineage has an independent SHA-256 chain with an integrity endpoint; data-platform changes are additionally appended to the global audit chain.
 - Production readiness requires OIDC, OpenAI Embeddings, and pgvector; local-only adapters cannot silently pass production checks.
 - Rule imports are limited to four interpreters and approved business fields; message placeholders are validated before activation.
 - Rule authors and submitters cannot approve their own version; pending content is hash-checked, and rollback creates a new reviewable draft.
@@ -88,6 +95,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 ## Production Extension Points
 
 - Replace the SQLite adapter with PostgreSQL-backed repositories and promote `app/migrations/` to Alembic-managed migrations.
+- Replace the local data-platform adapter with managed PostgreSQL/object storage and connect it to enterprise CDC/ELT orchestration, a schema registry, metadata catalog, lineage service, quality-alerting system, retention controls, and MDM. Keep the current contract API as the control-plane boundary.
 - Add OIDC discovery, token revocation/introspection where required by the enterprise IdP, and persist tenant identifiers on applications.
 - Harden the OpenAI Provider with stricter structured output validation, DLP, tool-call allowlists, retry policy, cost tracking, and model-output eval scoring.
 - Expand `scripts/quality_gate.py` into CI/CD quality gates with larger labeled cases and model-output scoring.
