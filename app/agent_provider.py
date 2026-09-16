@@ -34,6 +34,9 @@ class AgentContext:
     task_plan: dict = field(default_factory=dict)
     plan_execution: list[dict] = field(default_factory=list)
     context_governance: dict = field(default_factory=dict)
+    prompt_id: str = ""
+    prompt_version: str = ""
+    prompt_content: str = ""
 
 
 class AgentProvider:
@@ -147,8 +150,9 @@ class LangChainStructuredAgentProvider(AgentProvider):
             include_raw=True,
             strict=True if self.structured_method == "json_schema" else None,
         )
+        prompt_id, prompt_version, prompt_content = _resolved_prompt(task, context)
         prompt = ChatPromptTemplate.from_messages([
-            ("system", get_prompt(task).content),
+            ("system", prompt_content),
             ("human", "以下是经过权限控制和脱敏的业务上下文 JSON：\n{payload}"),
         ])
         chain = prompt | structured_model
@@ -158,7 +162,8 @@ class LangChainStructuredAgentProvider(AgentProvider):
                 "tags": ["fincredit", task, self.name],
                 "metadata": {
                     "application_id": context.application_id,
-                    "prompt_version": get_prompt(task).version,
+                    "prompt_id": prompt_id,
+                    "prompt_version": prompt_version,
                     "rag_retriever": context.retrieval_trace.get("retriever"),
                 },
             },
@@ -254,6 +259,13 @@ def provider_by_name(provider: str) -> AgentProvider:
     if provider in {"deepseek", "deepseek-chat"}:
         return DeepSeekChatAgentProvider()
     return DeterministicAgentProvider()
+
+
+def _resolved_prompt(task: str, context: AgentContext) -> tuple[str, str, str]:
+    if context.prompt_content:
+        return context.prompt_id, context.prompt_version, context.prompt_content
+    prompt = get_prompt(task)
+    return prompt.prompt_id, prompt.version, prompt.content
 
 
 def _allowed_evidence_ids(context: AgentContext) -> set[str]:

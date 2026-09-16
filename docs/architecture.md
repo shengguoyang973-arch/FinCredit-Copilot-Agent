@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.8 adds hard-bounded model context, canonical-data freshness/conflict signals, structured human review feedback, and append-only drift-alert actions to the governed credit data platform, deterministic task planning, four-eyes rule lifecycle, LangChain/pgvector RAG, and OIDC workflow.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.9 adds feedback-linked, four-eyes Prompt version governance with hash-checked atomic activation and rollback drafts to the governed credit data platform, deterministic task planning, LangChain/pgvector RAG, and OIDC workflow.
 
 ## Module Layout
 
@@ -27,7 +27,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/human_feedback.py`: Immutable structured human-review labels and append-only drift-alert action history.
 - `app/online_evaluation.py`: Privacy-preserving online quality metrics, human-feedback aggregation, immutable baseline history, baseline-tolerance checks, and persistent drift alerts.
 - `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
-- `app/prompt_registry.py`: Versioned governed prompts; every Agent Run records prompt identity and version.
+- `app/prompt_registry.py` / `app/prompt_store.py`: Runtime Prompt baseline registry plus feedback-linked, hash-checked four-eyes draft/review/activation/rollback lifecycle; every Agent Run freezes prompt identity, version, and content before model invocation.
 - `app/evaluation.py`: Offline evaluation contract for accuracy, evidence recall, boundary violations, latency, and cost.
 - `app/agent_runtime/`: Agent Run state machine, recovery queue, reliability policy, guardrails, provider routing, and release evaluation primitives.
 - `app/agent_output.py`: Agent response schemas and local validation for governed brief and business-answer outputs.
@@ -50,7 +50,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 7. Due scheduled rules atomically retire the previous active version and extend the audit chain.
 8. The pre-review engine loads only active rule versions and produces deterministic findings plus their required policy IDs.
 9. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
-10. Context governance bounds the separately copied evidence/tool JSON before `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
+10. The service resolves one approved Prompt version into the immutable Agent context. Context governance bounds the separately copied evidence/tool JSON before `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
 11. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
 12. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`; its input snapshot contains the plan and completion trace.
 13. Observability middleware emits request IDs and structured events. Each completed run updates online quality and human-feedback signals; once a compliance-owned baseline exists, breaches create or resolve persisted drift alerts, while compliance actions remain as append-only history.
@@ -67,6 +67,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Task plans are deterministic and versioned. They cannot add arbitrary tools or actions, and every planned tool must have a persisted completion result before structured output is generated.
 - The data-platform customer tool is organization-scoped, returns only approved financial fields and record metadata, and refuses `restricted` records for model context.
 - Model context is a separately bounded copy; full report evidence remains available internally, while the run snapshot records context hash, truncation IDs, canonical-data freshness, and conflict field names.
+- Prompt changes are content-hashed and linked to optional human-feedback IDs. Only a different compliance administrator can activate them; an in-flight Run keeps its original resolved Prompt.
 - External-model tool context excludes uploaded document text previews and registration identifiers.
 - Agent outputs are locally validated before being saved or shown.
 - Agent evidence IDs must be present in the retrieved RAG context.

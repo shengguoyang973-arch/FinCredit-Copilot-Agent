@@ -217,6 +217,37 @@ def scenario_policy_rule_four_eyes_lifecycle() -> None:
     assert any(item.rule_id == "POL-2.1" and item.result == "fail" for item in decision.findings)
 
 
+def scenario_prompt_four_eyes_lifecycle() -> None:
+    active = client.get("/v1/knowledge/prompts", headers={"X-User-Id": "compliance_001"})
+    assert active.status_code == 200, active.text
+    baseline = next(item for item in active.json()["items"] if item["task"] == "answer_question")
+    draft = client.post(
+        "/v1/knowledge/prompts", headers={"X-User-Id": "compliance_001"},
+        json={
+            "task": "answer_question", "version": "v2",
+            "content": baseline["content"] + "回答时应清楚区分政策证据与人工后续动作。",
+            "feedback_ids": [], "rationale": "质量门禁验证 Prompt 四眼发布与运行时版本追踪。",
+        },
+    )
+    assert draft.status_code == 201, draft.text
+    submitted = client.post(
+        "/v1/knowledge/prompts/answer_question/versions/v2/submit", headers={"X-User-Id": "compliance_001"},
+    )
+    assert submitted.status_code == 200, submitted.text
+    approved = client.post(
+        "/v1/knowledge/prompts/answer_question/versions/v2/decision",
+        headers={"X-User-Id": "compliance_002"},
+        json={"decision": "approved", "comment": "已独立复核输出约束与人工决策边界。"},
+    )
+    assert approved.status_code == 200, approved.text
+    answer = client.post(
+        "/v1/applications/APP001/agent-question", headers={"X-User-Id": "rm_001"},
+        json={"question": "下一步如何处理？"},
+    )
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["answer"]["prompt_version"] == "v2"
+
+
 def scenario_production_runtime_fails_closed() -> None:
     errors = validate_settings(Settings(deployment_environment="production", identity_provider="demo-header"))
     assert "生产环境禁止使用 demo-header 身份提供方" in errors
@@ -235,6 +266,7 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("observability_metrics_track_agent_health", scenario_observability_metrics_track_agent_health),
     ("approval_separation_of_duties", scenario_approval_separation_of_duties),
     ("policy_rule_four_eyes_lifecycle", scenario_policy_rule_four_eyes_lifecycle),
+    ("prompt_four_eyes_lifecycle", scenario_prompt_four_eyes_lifecycle),
     ("production_runtime_fails_closed", scenario_production_runtime_fails_closed),
     ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )

@@ -30,6 +30,7 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "agent_drift_alerts",
         "agent_feedback",
         "agent_drift_alert_actions",
+        "prompt_versions",
     }
     assert expected.issubset(table_names())
 

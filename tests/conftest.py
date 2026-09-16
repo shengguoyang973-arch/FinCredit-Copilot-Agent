@@ -6,6 +6,7 @@ from app import workflow_store
 from app import state_store
 from app import document_store
 from app import data_platform
+from app import prompt_store
 from app import rule_store
 from app.migrations.sqlite import apply_migrations
 
@@ -22,3 +23,4 @@ def isolated_policy_database(tmp_path, monkeypatch):
     state_store.initialize()
     document_store.initialize()
     data_platform.initialize()
+    prompt_store.initialize()

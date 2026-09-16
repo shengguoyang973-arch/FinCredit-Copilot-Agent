@@ -81,6 +81,8 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
             "run_id": run_id,
             "created_at": run["created_at"],
             "context_governance": agent_context.context_governance,
+            "prompt_id": agent_context.prompt_id,
+            "prompt_version": agent_context.prompt_version,
         }
         report = {
             "application_id": application.id,
@@ -151,7 +153,11 @@ def answer_business_question(application: LoanApplication, actor: User, question
         if answer.get("fallback"):
             transition_agent_run(run_id, AgentRunState.FALLBACK, reason=answer.get("fallback_reason"))
             transition_agent_run(run_id, AgentRunState.VALIDATING, event_type="fallback_output_validated")
-        answer = answer | {"context_governance": agent_context.context_governance}
+        answer = answer | {
+            "context_governance": agent_context.context_governance,
+            "prompt_id": agent_context.prompt_id,
+            "prompt_version": agent_context.prompt_version,
+        }
         agent_run = finalize_agent_run(run_id, snapshot, answer)
     except Exception as error:
         try:
@@ -212,6 +218,7 @@ def _build_agent_context(
     task: str = "generate_brief",
 ) -> tuple[dict, dict, PreReviewRuleDecision, list[dict], list[dict], AgentContext]:
     task_plan = build_task_plan(task, question)
+    prompt = get_prompt(task)
     customer = get_customer(application.customer_id)
     assert customer is not None
     materials = material_check(application.id)
@@ -251,6 +258,9 @@ def _build_agent_context(
         task_plan=task_plan.to_dict(),
         plan_execution=task_plan.execution_trace(tool_results),
         context_governance=context_governance,
+        prompt_id=prompt.prompt_id,
+        prompt_version=prompt.version,
+        prompt_content=prompt.content,
     )
     return customer, materials, rule_decision, findings, evidence, agent_context
 
@@ -277,8 +287,8 @@ def _agent_input_snapshot(agent_context: AgentContext, task: str, question: str 
         "rag": agent_context.retrieval_trace,
         "duration_ms": duration_ms,
         "request_id": current_request_id(),
-        "prompt_id": get_prompt(task).prompt_id,
-        "prompt_version": get_prompt(task).version,
+        "prompt_id": agent_context.prompt_id,
+        "prompt_version": agent_context.prompt_version,
     }
 
 

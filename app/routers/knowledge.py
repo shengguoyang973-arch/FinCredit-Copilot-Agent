@@ -17,12 +17,23 @@ from app.rule_store import (
     policy_rule_diff,
     submit_policy_rule,
 )
+from app.prompt_store import (
+    create_prompt_draft,
+    create_rollback_draft as create_prompt_rollback_draft,
+    decide_prompt,
+    list_prompt_versions,
+    prompt_diff,
+    submit_prompt,
+)
 from app.schemas import (
     PolicyImportRequest,
     PolicyRuleDecisionRequest,
     PolicyRuleImportRequest,
     PolicyRuleRollbackRequest,
     PolicySearchRequest,
+    PromptDecisionRequest,
+    PromptDraftRequest,
+    PromptRollbackRequest,
 )
 from app.security import current_user, require_roles
 
@@ -160,3 +171,88 @@ def rollback_rule(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"message": "回滚草稿已创建，仍须四眼复核", "rule": asdict(draft)}
+
+
+@router.get("/prompts")
+def prompts(
+    include_inactive: bool = False,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    items = list_prompt_versions(active_only=not include_inactive)
+    audit("prompt_versions_viewed", user.id, "agent_prompts", result_count=len(items), include_inactive=include_inactive)
+    return {"items": items}
+
+
+@router.get("/prompts/{task}/versions/{version}/diff")
+def prompt_version_diff(
+    task: str,
+    version: str,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        result = prompt_diff(task, version)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    audit("prompt_diff_viewed", user.id, task, version=version, baseline_version=result["baseline_version"])
+    return result
+
+
+@router.post("/prompts", status_code=status.HTTP_201_CREATED)
+def create_prompt(
+    body: PromptDraftRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        prompt = create_prompt_draft(
+            task=body.task, version=body.version, content=body.content, feedback_ids=body.feedback_ids,
+            rationale=body.rationale, actor_id=user.id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"message": "Prompt 草稿已创建，须提交并由另一名合规管理员复核", "prompt": prompt}
+
+
+@router.post("/prompts/{task}/versions/{version}/submit")
+def submit_prompt_version(
+    task: str,
+    version: str,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        prompt = submit_prompt(task, version, user.id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"message": "Prompt 已提交复核", "prompt": prompt}
+
+
+@router.post("/prompts/{task}/versions/{version}/decision")
+def decide_prompt_version(
+    task: str,
+    version: str,
+    body: PromptDecisionRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        prompt = decide_prompt(task, version, user.id, body.decision, body.comment)
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    message = "Prompt 复核通过并已原子激活" if body.decision == "approved" else "Prompt 已驳回"
+    return {"message": message, "prompt": prompt}
+
+
+@router.post("/prompts/{task}/rollback", status_code=status.HTTP_201_CREATED)
+def rollback_prompt(
+    task: str,
+    body: PromptRollbackRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        prompt = create_prompt_rollback_draft(
+            task=task, target_version=body.target_version, new_version=body.new_version,
+            reason=body.reason, actor_id=user.id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"message": "Prompt 回滚草稿已创建，仍须四眼复核", "prompt": prompt}

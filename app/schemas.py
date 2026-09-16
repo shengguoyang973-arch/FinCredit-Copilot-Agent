@@ -150,3 +150,31 @@ class AgentFeedbackRequest(BaseModel):
 class DriftAlertActionRequest(BaseModel):
     action: Literal["acknowledged", "investigating", "false_positive"]
     comment: str = Field(min_length=5, max_length=1000)
+
+
+class PromptDraftRequest(BaseModel):
+    task: Literal["generate_brief", "answer_question"]
+    version: str = Field(pattern=r"^v[1-9][0-9]{0,20}$")
+    content: str = Field(min_length=80, max_length=8000)
+    feedback_ids: list[str] = Field(default_factory=list, max_length=50)
+    rationale: str = Field(min_length=10, max_length=1000)
+
+    @field_validator("feedback_ids")
+    @classmethod
+    def feedback_ids_are_unique(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("feedback_ids 不能包含重复项")
+        if any(not value.startswith("AFB-") or len(value) > 40 for value in values):
+            raise ValueError("feedback_ids 格式无效")
+        return values
+
+
+class PromptDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    comment: str = Field(min_length=5, max_length=1000)
+
+
+class PromptRollbackRequest(BaseModel):
+    target_version: str = Field(pattern=r"^v[1-9][0-9]{0,20}$")
+    new_version: str = Field(pattern=r"^v[1-9][0-9]{0,20}$")
+    reason: str = Field(min_length=10, max_length=1000)

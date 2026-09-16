@@ -1,6 +1,6 @@
 # 生产运行：规则、数据中台、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v0.8 提供六条可独立测试、但在生产共同受控的链路：政策规则发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
+FinCredit Copilot v0.9 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -35,6 +35,8 @@ FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE=0.9
 FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE=0.95
 FINCREDIT_AGENT_CONTEXT_MAX_CHARS=12000
 FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS=168
+# 可选：只能校验当前活动 Prompt 是否为预期版本，不能覆盖内容
+FINCREDIT_PROMPT_VERSION=v1
 ```
 
 不要把密钥或带密码的连接串提交到 Git。应由 Secret Manager、Kubernetes Secret 或同等受控设施注入。
@@ -102,6 +104,12 @@ FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS=168
 | `GET /v1/observability/drift-alerts` | 查询打开或已恢复的告警 |
 | `GET/POST /v1/applications/{application_id}/agent-runs/{run_id}/feedback` | 查询或提交 Run 的结构化人工复核 |
 | `GET/POST /v1/observability/drift-alerts/{alert_id}/actions` | 查询或追加告警处置历史 |
+| `GET /v1/knowledge/prompts` | 查询活动 Prompt，`include_inactive=true` 查询完整历史 |
+| `POST /v1/knowledge/prompts` | 创建可关联人工反馈的 Prompt 草稿 |
+| `GET /v1/knowledge/prompts/{task}/versions/{version}/diff` | 核验内容哈希并比较候选与已批准基线 |
+| `POST /v1/knowledge/prompts/{task}/versions/{version}/submit` | 提交 Prompt 给独立合规管理员复核 |
+| `POST /v1/knowledge/prompts/{task}/versions/{version}/decision` | 独立审批或驳回；批准时原子激活 |
+| `POST /v1/knowledge/prompts/{task}/rollback` | 从已批准版本创建回滚草稿，仍须四眼复核 |
 
 本地 SQLite 告警适合演示和回归。生产中应将指标/告警导出到 Prometheus、OpenTelemetry、SIEM 或企业告警平台，并结合值班、SLO、事件响应和人工复核。不能因为数据量不足、没有基线或评估 API 正常响应，就将模型声明为“无漂移”。
 

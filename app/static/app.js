@@ -263,7 +263,7 @@ function renderReport(report) {
   const brief = report.agent_brief ? `
     <div class="agent-brief">
       <h3>智能体评述</h3>
-      <p class="run-meta">模型服务：${escapeHtml(labelFrom(PROVIDER_LABELS, report.agent_brief.provider))} · 运行编号：${escapeHtml(report.agent_brief.run_id || "-")} · ${escapeHtml(report.agent_brief.created_at || "-")}</p>
+      <p class="run-meta">模型服务：${escapeHtml(labelFrom(PROVIDER_LABELS, report.agent_brief.provider))} · Prompt：${escapeHtml(report.agent_brief.prompt_version || "-")} · 运行编号：${escapeHtml(report.agent_brief.run_id || "-")} · ${escapeHtml(report.agent_brief.created_at || "-")}</p>
       <p>${escapeHtml(report.agent_brief.summary)}</p>
       <div class="brief-grid">
         <div><strong>关键风险</strong><ul>${report.agent_brief.key_risks.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>
@@ -320,7 +320,7 @@ function renderAgentAnswer(data) {
   document.querySelector("#agent-state").className = `tag ${answer.fallback ? "pending" : "approved"}`;
   document.querySelector("#agent-answer").innerHTML = `
     <div class="agent-brief">
-      <p class="run-meta">模型服务：${escapeHtml(labelFrom(PROVIDER_LABELS, answer.provider))} · 运行编号：${escapeHtml(answer.run_id || "-")} · ${escapeHtml(answer.created_at || "-")}</p>
+      <p class="run-meta">模型服务：${escapeHtml(labelFrom(PROVIDER_LABELS, answer.provider))} · Prompt：${escapeHtml(answer.prompt_version || "-")} · 运行编号：${escapeHtml(answer.run_id || "-")} · ${escapeHtml(answer.created_at || "-")}</p>
       <p>${escapeHtml(answer.answer)}</p>
       <div class="brief-grid">
         <div><strong>证据条款</strong><ul>${(answer.supporting_evidence_ids || []).map(item => `<li>${escapeHtml(item)}</li>`).join("") || "<li>无</li>"}</ul></div>

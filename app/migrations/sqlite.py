@@ -158,6 +158,18 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         )""",
         "CREATE INDEX IF NOT EXISTS idx_agent_drift_alert_actions_alert ON agent_drift_alert_actions(alert_id, created_at DESC)",
     )),
+    ("0010_governed_prompt_lifecycle", (
+        """CREATE TABLE IF NOT EXISTS prompt_versions (
+            task TEXT NOT NULL, version TEXT NOT NULL, prompt_id TEXT NOT NULL,
+            content TEXT NOT NULL, content_hash TEXT NOT NULL, status TEXT NOT NULL,
+            feedback_ids_json TEXT NOT NULL, rationale TEXT NOT NULL,
+            created_by TEXT NOT NULL, submitted_by TEXT, reviewed_by TEXT,
+            review_comment TEXT, created_at TEXT NOT NULL, activated_at TEXT,
+            PRIMARY KEY (task, version)
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_one_active ON prompt_versions(task) WHERE status = 'active'",
+        "CREATE INDEX IF NOT EXISTS idx_prompt_versions_lifecycle ON prompt_versions(task, status, created_at DESC)",
+    )),
 )
 
 
