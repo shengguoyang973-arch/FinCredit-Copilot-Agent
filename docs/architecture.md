@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.6 adds a governed credit data platform: versioned data contracts, source allowlists, quality-gated ingestion batches, organization-scoped canonical-data APIs, and a separately verifiable lineage hash chain. It retains the v0.5 four-eyes policy-rule release lifecycle, LangChain/pgvector RAG, and OIDC workflow.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 0.7 adds deterministic task planning, minimized canonical-data context and online quality/drift operations to the governed credit data platform, four-eyes rule lifecycle, LangChain/pgvector RAG, and OIDC workflow.
 
 ## Module Layout
 
@@ -22,12 +22,14 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/data_platform.py`: Data-contract catalog, contract-hash lifecycle, source-authorized ingestion, deterministic data-quality checks, canonical-record history, and lineage-chain verification.
 - `app/routers/data_platform.py`: Data-platform catalog, contract publication, ingestion, canonical-data, batch, and lineage APIs with role/organization guardrails.
 - `app/agent_provider.py`: LangChain LCEL prompt/model/structured-output pipeline with local deterministic fallback, OpenAI Responses, and DeepSeek-compatible implementations.
+- `app/task_planner.py`: Versioned, deterministic dependency graphs for supported Agent tasks; only approved read-only tools and mandatory human-decision boundaries can be planned.
+- `app/online_evaluation.py`: Privacy-preserving online quality metrics, immutable baseline history, baseline-tolerance checks, and persistent drift alerts.
 - `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
 - `app/prompt_registry.py`: Versioned governed prompts; every Agent Run records prompt identity and version.
 - `app/evaluation.py`: Offline evaluation contract for accuracy, evidence recall, boundary violations, latency, and cost.
 - `app/agent_runtime/`: Agent Run state machine, recovery queue, reliability policy, guardrails, provider routing, and release evaluation primitives.
 - `app/agent_output.py`: Agent response schemas and local validation for governed brief and business-answer outputs.
-- `app/agent_tools.py`: Read-only Agent tool allowlist and tool execution trace for application, material, policy, and approval status lookups.
+- `app/agent_tools.py`: Read-only Agent tool allowlist and tool execution trace for application, materials, policy, approval state, and minimized organization-scoped canonical-customer lookups.
 - `app/observability.py`: Request ID propagation, JSON logging, and structured operational events.
 - `app/metrics.py`: Agent run metric aggregation for latency, fallback, provider, task, and tool usage.
 - `app/*_store.py`: Local repository adapters for policies, transactional workflow state, applications, hash-chained audit events, and documents. Stores own queries and seed data, while migrations own schema changes.
@@ -40,16 +42,16 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 1. A user selects an application and role in the workbench.
 2. API routes authenticate the demo user with `X-User-Id` and enforce role permissions.
 3. Upstream CRM, core-credit, or risk-engine integrations can first publish a data-contract-bound batch through the data platform; only accepted batches update canonical records.
-4. Service orchestration loads application, customer, policy, and material status from stores.
-5. Separately, compliance authors create immutable rule drafts; another compliance actor reviews the diff and approves, rejects, or schedules the version.
-6. Due scheduled rules atomically retire the previous active version and extend the audit chain.
-7. The pre-review engine loads only active rule versions and produces deterministic findings plus their required policy IDs.
-8. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
-9. The tool allowlist supplies minimized, read-only business context without document body previews.
+4. The deterministic planner creates a versioned dependency graph. It selects only allowlisted read tools, mandates deterministic controls/RAG/structured validation, and adds approval-status lookup only to process questions.
+5. Service orchestration loads application, customer, material status, and a minimized organization-scoped canonical-customer snapshot from stores.
+6. Separately, compliance authors create immutable rule drafts; another compliance actor reviews the diff and approves, rejects, or schedules the version.
+7. Due scheduled rules atomically retire the previous active version and extend the audit chain.
+8. The pre-review engine loads only active rule versions and produces deterministic findings plus their required policy IDs.
+9. `LangChainPolicyRetriever` performs lexical/vector hybrid retrieval using the configured embedding/vector adapters and emits citation-bearing `Document` objects.
 10. `ChatPromptTemplate` and `ChatOpenAI` produce a Pydantic structured response; model exceptions flow through retry/circuit-breaker handling before deterministic fallback.
 11. Output validation checks nested types, retrieved evidence IDs, and the no-auto-decision boundary.
-12. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`.
-13. Observability middleware and Agent events emit request IDs, JSON logs, and metrics.
+12. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`; its input snapshot contains the plan and completion trace.
+13. Observability middleware emits request IDs and structured events. Each completed run updates online quality signals; once a compliance-owned baseline exists, breaches create or resolve persisted drift alerts.
 14. The approval policy engine evaluates whether the application can be submitted.
 15. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
 16. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions; returned applications must be re-reviewed before resubmission.
@@ -60,6 +62,8 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - The Agent does not approve, reject, or return credit applications.
 - Real-model Providers fall back to the local deterministic Provider when credentials are missing or calls fail.
 - Agent tools are read-only and selected from an explicit allowlist.
+- Task plans are deterministic and versioned. They cannot add arbitrary tools or actions, and every planned tool must have a persisted completion result before structured output is generated.
+- The data-platform customer tool is organization-scoped, returns only approved financial fields and record metadata, and refuses `restricted` records for model context.
 - External-model tool context excludes uploaded document text previews and registration identifiers.
 - Agent outputs are locally validated before being saved or shown.
 - Agent evidence IDs must be present in the retrieved RAG context.
@@ -67,6 +71,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Every HTTP response carries `X-Request-Id`, and audit events include the active request ID when available.
 - Agent runs record latency, fallback status, and tool-call summaries for operational review.
 - The workbench observability panel reads the compliance-only metrics endpoint so demo operators can see recent Agent runs, fallback rate, latency, provider distribution, and tool usage without leaving the business flow.
+- Online evaluation computes fallback rate, P95 latency, evidence coverage, planner adherence, and automatic-decision boundary violations from persisted runs. It requires a compliance-owned baseline and minimum sample size before it declares drift health, and alerts remain persisted until the signal recovers.
 - Uploaded document records store SHA-256 hashes and extracted fields.
 - Agent run records store structured input summaries and outputs, not raw document bodies.
 - Policy imports require the compliance administrator role.

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.6.0"
+    app_version: str = "0.7.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -24,6 +24,12 @@ class Settings:
     agent_circuit_cooldown_seconds: float = 30.0
     max_document_bytes: int = 2_000_000
     data_platform_max_batch_records: int = 500
+    online_evaluation_window_runs: int = 50
+    drift_min_samples: int = 10
+    drift_max_fallback_rate: float = 0.2
+    drift_max_p95_latency_ms: float = 5_000.0
+    drift_min_evidence_coverage: float = 0.9
+    drift_min_plan_adherence: float = 0.95
     rag_top_k: int = 3
     rag_lexical_weight: float = 0.85
     rag_vector_weight: float = 0.15
@@ -69,6 +75,22 @@ def get_settings() -> Settings:
         max_document_bytes=max_document_bytes,
         data_platform_max_batch_records=int(os.getenv(
             "FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS", str(Settings.data_platform_max_batch_records)
+        )),
+        online_evaluation_window_runs=int(os.getenv(
+            "FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS", str(Settings.online_evaluation_window_runs)
+        )),
+        drift_min_samples=int(os.getenv("FINCREDIT_DRIFT_MIN_SAMPLES", str(Settings.drift_min_samples))),
+        drift_max_fallback_rate=float(os.getenv(
+            "FINCREDIT_DRIFT_MAX_FALLBACK_RATE", str(Settings.drift_max_fallback_rate)
+        )),
+        drift_max_p95_latency_ms=float(os.getenv(
+            "FINCREDIT_DRIFT_MAX_P95_LATENCY_MS", str(Settings.drift_max_p95_latency_ms)
+        )),
+        drift_min_evidence_coverage=float(os.getenv(
+            "FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE", str(Settings.drift_min_evidence_coverage)
+        )),
+        drift_min_plan_adherence=float(os.getenv(
+            "FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE", str(Settings.drift_min_plan_adherence)
         )),
         rag_top_k=int(os.getenv("FINCREDIT_RAG_TOP_K", str(Settings.rag_top_k))),
         rag_lexical_weight=float(os.getenv("FINCREDIT_RAG_LEXICAL_WEIGHT", str(Settings.rag_lexical_weight))),
@@ -157,6 +179,18 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("FINCREDIT_MAX_DOCUMENT_BYTES 必须大于 0")
     if not 1 <= settings.data_platform_max_batch_records <= 10_000:
         errors.append("FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS 必须在 1 到 10000 之间")
+    if not 1 <= settings.online_evaluation_window_runs <= 10_000:
+        errors.append("FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS 必须在 1 到 10000 之间")
+    if not 1 <= settings.drift_min_samples <= settings.online_evaluation_window_runs:
+        errors.append("FINCREDIT_DRIFT_MIN_SAMPLES 必须在 1 到在线评估窗口大小之间")
+    if not 0 <= settings.drift_max_fallback_rate <= 1:
+        errors.append("FINCREDIT_DRIFT_MAX_FALLBACK_RATE 必须在 0 到 1 之间")
+    if settings.drift_max_p95_latency_ms <= 0:
+        errors.append("FINCREDIT_DRIFT_MAX_P95_LATENCY_MS 必须大于 0")
+    if not 0 <= settings.drift_min_evidence_coverage <= 1:
+        errors.append("FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE 必须在 0 到 1 之间")
+    if not 0 <= settings.drift_min_plan_adherence <= 1:
+        errors.append("FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE 必须在 0 到 1 之间")
     if not 1 <= settings.rag_top_k <= 50:
         errors.append("FINCREDIT_RAG_TOP_K 必须在 1 到 50 之间")
     if settings.rag_lexical_weight < 0 or settings.rag_vector_weight < 0:

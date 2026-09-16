@@ -378,6 +378,17 @@ def list_canonical_records(*, entity_type: str, organization_id: str | None, lim
     return [_record_from_row(row) for row in rows]
 
 
+def get_canonical_record(*, entity_type: str, organization_id: str, business_key: str) -> dict | None:
+    """Read the current canonical record for an approved internal tool call."""
+    with _connection() as connection:
+        row = connection.execute(
+            """SELECT * FROM data_records
+               WHERE entity_type = ? AND organization_id = ? AND business_key = ? AND is_current = 1""",
+            (entity_type, organization_id, business_key),
+        ).fetchone()
+    return _record_from_row(row) if row else None
+
+
 def _record_from_row(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"], "batch_id": row["batch_id"], "organization_id": row["organization_id"],

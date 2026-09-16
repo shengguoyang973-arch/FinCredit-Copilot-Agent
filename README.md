@@ -2,7 +2,7 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.6 在 LangChain、pgvector、企业 OIDC 和政策规则发布治理基础上，加入系统化信贷数据中台：数据契约目录、受控批次接入、确定性质量校验、组织隔离的规范数据服务和可验证血缘链；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.7 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，加入受控任务规划、数据中台最小化只读工具、线上质量评估与漂移告警；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -15,6 +15,8 @@ LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/la
 规则发布状态机、复核 API 和回滚流程见 [docs/policy-rule-lifecycle.md](docs/policy-rule-lifecycle.md)。
 
 数据中台的数据契约、接入、质量、数据服务和血缘接口见 [docs/data-platform.md](docs/data-platform.md)。
+
+任务规划、最小化上下文和线上评估/漂移告警见 [docs/agent-operations.md](docs/agent-operations.md)。
 
 API 已按领域拆分到 `app/routers/`，`main.py` 只负责应用装配、静态工作台和路由注册。
 
@@ -39,6 +41,9 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 - 信贷数据中台：客户/授信申请标准数据契约目录、版本不可覆盖、来源系统白名单和契约内容哈希
 - 受控数据接入：批次仅保存数据指纹，先执行必填字段、类型一致性、业务键去重校验；失败批次保留回执但绝不发布规范记录
 - 规范数据服务与治理：按组织隔离查询当前版本数据、保留历史版本，独立 SHA-256 血缘链和全局审计链均可验证
+- 受控任务规划：预审和问答均由版本化任务图编排，只能调用批准的只读工具；计划、工具轨迹和完成状态写入 Agent Run
+- 数据中台只读工具：Agent 仅按申请所属组织读取规范客户画像，限制级记录和标识字段不会进入模型上下文
+- 线上评估与漂移告警：持续测量降级率、P95 延迟、证据覆盖、规划一致性和自动决策边界；合规管理员可建立基线并查看持久化告警
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -95,6 +100,10 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 - `FINCREDIT_INPUT_COST_PER_1K_USD` / `FINCREDIT_OUTPUT_COST_PER_1K_USD`：Token 成本估算单价；不配置时只统计 Token，不虚构成本。
 - `FINCREDIT_MAX_DOCUMENT_BYTES`：单个材料上传字节上限，默认 `2000000`。
 - `FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS`：一次受控接入批次可提交的最多记录数，默认 `500`，范围 `1` 到 `10000`。
+- `FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS`：线上评估读取的最近完成 Agent Run 数，默认 `50`。
+- `FINCREDIT_DRIFT_MIN_SAMPLES`：建立基线和判断漂移所需的最小样本数，默认 `10`。
+- `FINCREDIT_DRIFT_MAX_FALLBACK_RATE` / `FINCREDIT_DRIFT_MAX_P95_LATENCY_MS`：模型降级率与 P95 延迟上限，默认 `0.2` / `5000`。
+- `FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE` / `FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE`：最低证据覆盖率和规划一致性，默认 `0.9` / `0.95`。
 - `FINCREDIT_RAG_TOP_K`：RAG 返回条款数量，调优默认值为 `3`。
 - `FINCREDIT_RAG_LEXICAL_WEIGHT`：词法召回权重，调优默认值为 `0.85`。
 - `FINCREDIT_RAG_VECTOR_WEIGHT`：向量召回权重，调优默认值为 `0.15`。
@@ -134,10 +143,12 @@ CRM / 核心信贷 / 风险引擎（受控服务身份）
   -> 数据质量：完整性、类型一致性、批内业务键唯一性
   -> accepted：版本化规范数据 + 血缘哈希链 + 全局审计链
   -> rejected：质量结果和血缘回执，零规范记录发布
-  -> 组织隔离数据 API -> 授信审批、风险分析、Agent 只读工具（后续接入）
+  -> 组织隔离数据 API -> 授信审批、风险分析、Agent 最小化只读工具
 ```
 
 数据中台不以“把所有数据复制到一个数据库”为目标。每次接入必须绑定一份生效数据契约和授权来源；成功记录按 `组织 + 实体类型 + 业务键` 维护当前规范视图，同时保留历史版本。当前实现提供 SQLite 本地适配器以便演示和回归测试；生产应迁移到受管 PostgreSQL、对象存储和企业调度/CDC 平台，详见 [数据中台说明](docs/data-platform.md)。
+
+任务执行先由确定性任务规划器生成“读取申请、读取中台规范画像、核验材料、检索政策、结构化输出、人工边界”的依赖图；仅流程类问答才额外读取审批状态。规划不能引入未登记工具，也不执行授信决定。每次运行完成后系统会计算线上质量信号；样本达到阈值后，由合规管理员固化基线，后续超出基线容差或硬阈值时产生漂移告警。
 
 真实大模型模式示例：
 

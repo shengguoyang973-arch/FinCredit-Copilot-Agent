@@ -14,9 +14,11 @@ from app.document_store import material_check
 from app.domain import ApplicationStatus, LoanApplication, PolicyClause, Role, User
 from app.knowledge_store import list_policies
 from app.observability import current_request_id, log_event
+from app.online_evaluation import assess_and_sync_alerts
 from app.rag import retrieve_policy_context
 from app.repository import audit, get_customer
 from app.risk_rules import PreReviewRuleDecision, evaluate_pre_review_rules
+from app.task_planner import build_task_plan
 from app.workflow_store import (
     create_agent_run,
     create_approval_task,
@@ -49,12 +51,17 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
     run_id = run["id"]
     try:
         if run["state"] == AgentRunState.CREATED.value:
-            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING)
-        customer, materials, rule_decision, findings, evidence, agent_context = _build_agent_context(application)
+            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING, planner="deterministic-task-planner-v1")
+        customer, materials, rule_decision, findings, evidence, agent_context = _build_agent_context(
+            application, task="generate_brief"
+        )
         snapshot = _agent_input_snapshot(agent_context, "generate_brief")
         update_agent_run_snapshot(run_id, snapshot)
         if agent_context.tool_results:
-            transition_agent_run(run_id, AgentRunState.TOOL_RUNNING, tool_count=len(agent_context.tool_results))
+            transition_agent_run(
+                run_id, AgentRunState.TOOL_RUNNING, tool_count=len(agent_context.tool_results),
+                plan_id=agent_context.task_plan["id"],
+            )
         transition_agent_run(run_id, AgentRunState.MODEL_RUNNING, provider=agent_provider.name)
         started = time.perf_counter()
         agent_brief, attempts = _invoke_agent_provider(
@@ -82,6 +89,7 @@ def pre_review(application: LoanApplication, actor: User, existing_run_id: str |
             "materials": materials,
             "rag": agent_context.retrieval_trace,
             "agent_brief": agent_brief,
+            "task_plan": agent_context.task_plan,
         }
         agent_run = finalize_pre_review(
             application.id,
@@ -114,12 +122,15 @@ def answer_business_question(application: LoanApplication, actor: User, question
     run_id = run["id"]
     try:
         if run["state"] == AgentRunState.CREATED.value:
-            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING)
-        _, _, _, _, _, agent_context = _build_agent_context(application, model_question)
+            transition_agent_run(run_id, AgentRunState.CONTEXT_BUILDING, planner="deterministic-task-planner-v1")
+        _, _, _, _, _, agent_context = _build_agent_context(application, model_question, task="answer_question")
         snapshot = _agent_input_snapshot(agent_context, "answer_question", model_question)
         update_agent_run_snapshot(run_id, snapshot)
         if agent_context.tool_results:
-            transition_agent_run(run_id, AgentRunState.TOOL_RUNNING, tool_count=len(agent_context.tool_results))
+            transition_agent_run(
+                run_id, AgentRunState.TOOL_RUNNING, tool_count=len(agent_context.tool_results),
+                plan_id=agent_context.task_plan["id"],
+            )
         transition_agent_run(run_id, AgentRunState.MODEL_RUNNING, provider=agent_provider.name)
         started = time.perf_counter()
         answer, attempts = _invoke_agent_provider(
@@ -144,7 +155,12 @@ def answer_business_question(application: LoanApplication, actor: User, question
     answer = answer | {"run_id": agent_run["id"], "created_at": agent_run["created_at"]}
     _log_agent_run(application.id, agent_provider.name, agent_run["id"], "answer_question", duration_ms, answer)
     audit("agent_question_answered", actor.id, application.id, provider=agent_provider.name, run_id=agent_run["id"])
-    return {"application_id": application.id, "question": model_question, "answer": answer}
+    return {
+        "application_id": application.id,
+        "question": model_question,
+        "answer": answer,
+        "task_plan": agent_context.task_plan,
+    }
 
 
 def resume_agent_run_execution(application: LoanApplication, actor: User, run_id: str) -> dict:
@@ -182,7 +198,13 @@ def submit_for_approval(application: LoanApplication, actor: User, override_reas
     return task | {"submission_policy": policy_decision.to_dict()}
 
 
-def _build_agent_context(application: LoanApplication, question: str | None = None) -> tuple[dict, dict, PreReviewRuleDecision, list[dict], list[dict], AgentContext]:
+def _build_agent_context(
+    application: LoanApplication,
+    question: str | None = None,
+    *,
+    task: str = "generate_brief",
+) -> tuple[dict, dict, PreReviewRuleDecision, list[dict], list[dict], AgentContext]:
+    task_plan = build_task_plan(task, question)
     customer = get_customer(application.customer_id)
     assert customer is not None
     materials = material_check(application.id)
@@ -205,7 +227,7 @@ def _build_agent_context(application: LoanApplication, question: str | None = No
         }
         for hit in sorted(retrieval.hits, key=lambda item: item.policy.id)
     ]
-    tool_results = execute_agent_tools(application, question)
+    tool_results = execute_agent_tools(application, question, task_plan.tool_names)
     agent_context = AgentContext(
         application_id=application.id,
         customer_name=customer["name"],
@@ -218,6 +240,8 @@ def _build_agent_context(application: LoanApplication, question: str | None = No
         missing_materials=materials["missing"],
         tool_results=tool_results,
         retrieval_trace=retrieval.trace(),
+        task_plan=task_plan.to_dict(),
+        plan_execution=task_plan.execution_trace(tool_results),
     )
     return customer, materials, rule_decision, findings, evidence, agent_context
 
@@ -236,6 +260,10 @@ def _agent_input_snapshot(agent_context: AgentContext, task: str, question: str 
         "missing_material_types": [item["type"] for item in agent_context.missing_materials],
         "tool_names": [item["tool_name"] for item in agent_context.tool_results],
         "tool_count": len(agent_context.tool_results),
+        "task_plan": agent_context.task_plan,
+        "plan_execution": agent_context.plan_execution,
+        "planner_version": agent_context.task_plan.get("version"),
+        "planned_tool_names": agent_context.task_plan.get("tool_names", []),
         "rag": agent_context.retrieval_trace,
         "duration_ms": duration_ms,
         "request_id": current_request_id(),
@@ -274,3 +302,15 @@ def _log_agent_run(application_id: str, provider: str, run_id: str, task: str, d
         duration_ms=duration_ms,
         fallback=bool(output.get("fallback")),
     )
+    try:
+        assessment = assess_and_sync_alerts()
+        log_event(
+            "online_evaluation_completed",
+            event="online_evaluation_completed",
+            run_id=run_id,
+            status=assessment["status"],
+            open_alert_count=len(assessment["alerts"]),
+        )
+    except Exception as error:
+        # Monitoring must not invalidate an already persisted governed output.
+        log_event("online_evaluation_failed", event="online_evaluation_failed", run_id=run_id, error=type(error).__name__)

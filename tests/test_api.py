@@ -32,7 +32,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.6.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.7.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -151,8 +151,12 @@ def test_agent_runs_are_persisted_and_queryable() -> None:
     assert events.status_code == 200
     assert events.json()["items"][-1]["to_state"] == "completed"
     assert item["input_snapshot"]["evidence_ids"] == ["POL-1.2", "POL-2.1", "POL-3.4"]
-    assert item["input_snapshot"]["tool_names"] == ["get_application_snapshot", "get_material_status", "get_policy_evidence"]
-    assert item["input_snapshot"]["tool_count"] == 3
+    assert item["input_snapshot"]["tool_names"] == [
+        "get_application_snapshot", "get_canonical_customer_snapshot", "get_material_status", "get_policy_evidence"
+    ]
+    assert item["input_snapshot"]["tool_count"] == 4
+    assert item["input_snapshot"]["task_plan"]["version"] == "v1"
+    assert all(step["status"] == "completed" for step in item["input_snapshot"]["plan_execution"])
     assert item["input_snapshot"]["duration_ms"] >= 0
     assert item["output"]["summary"].startswith("华辰设备制造有限公司申请流动资金授信")
 

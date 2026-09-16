@@ -129,6 +129,21 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_data_lineage_hash ON data_lineage_events(event_hash)",
         "CREATE INDEX IF NOT EXISTS idx_data_lineage_batch ON data_lineage_events(batch_id, id)",
     )),
+    ("0008_online_evaluation", (
+        """CREATE TABLE IF NOT EXISTS agent_evaluation_baselines (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, metrics_json TEXT NOT NULL,
+            sample_count INTEGER NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+            retired_at TEXT
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_eval_one_active_baseline ON agent_evaluation_baselines(name) WHERE retired_at IS NULL",
+        """CREATE TABLE IF NOT EXISTS agent_drift_alerts (
+            id TEXT PRIMARY KEY, signal TEXT NOT NULL, severity TEXT NOT NULL, status TEXT NOT NULL,
+            baseline_id TEXT NOT NULL, observed_json TEXT NOT NULL, message TEXT NOT NULL,
+            first_detected_at TEXT NOT NULL, last_detected_at TEXT NOT NULL, resolved_at TEXT
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_drift_one_open_signal ON agent_drift_alerts(signal) WHERE status = 'open'",
+        "CREATE INDEX IF NOT EXISTS idx_agent_drift_status ON agent_drift_alerts(status, last_detected_at DESC)",
+    )),
 )
 
 

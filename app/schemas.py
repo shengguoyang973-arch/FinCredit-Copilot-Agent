@@ -135,3 +135,7 @@ class DataIngestionRequest(BaseModel):
     contract_id: str = Field(pattern=r"^DC-[A-Za-z0-9.-]{3,60}$")
     organization_id: str = Field(pattern=r"^[A-Za-z0-9_-]{2,80}$")
     records: list[dict[str, Any]] = Field(min_length=1, max_length=10_000)
+
+
+class OnlineEvaluationBaselineRequest(BaseModel):
+    name: str = Field(default="default", pattern=r"^[a-z][a-z0-9_-]{1,63}$")

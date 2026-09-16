@@ -25,6 +25,7 @@ const TASK_LABELS = {
 
 const TOOL_LABELS = {
   get_application_snapshot: "读取授信申请画像",
+  get_canonical_customer_snapshot: "读取数据中台客户画像",
   get_material_status: "检查材料完整性",
   get_policy_evidence: "检索政策证据",
   get_approval_status: "查询审批状态",
@@ -303,6 +304,11 @@ function renderMetrics(metrics) {
   const providers = Object.entries(metrics.provider_counts || {})
     .map(([name, count]) => `<li>${escapeHtml(labelFrom(PROVIDER_LABELS, name))}：${escapeHtml(count)}</li>`)
     .join("") || "<li>暂无数据</li>";
+  const online = metrics.online_evaluation || {};
+  const observed = online.observed || {};
+  const onlineStatus = {
+    healthy: "健康", alert: "存在漂移告警", baseline_required: "等待建立基线", insufficient_data: "样本不足",
+  }[online.status] || "未评估";
   const recent = (metrics.recent_runs || []).map(run => `
     <tr>
       <td>${escapeHtml(run.id)}</td>
@@ -325,6 +331,10 @@ function renderMetrics(metrics) {
     <div class="observability-grid">
       <div><h3>工具调用</h3><ul>${tools}</ul></div>
       <div><h3>模型服务分布</h3><ul>${providers}</ul></div>
+    </div>
+    <div class="observability-grid">
+      <div><h3>线上质量评估</h3><p>状态：${escapeHtml(onlineStatus)}；样本：${escapeHtml(observed.sample_count ?? 0)}；证据覆盖：${escapeHtml(((observed.evidence_coverage || 0) * 100).toFixed(1))}%</p></div>
+      <div><h3>规划一致性</h3><p>任务规划与实际工具执行：${escapeHtml(observed.plan_adherence_rate == null ? "待采样" : `${(observed.plan_adherence_rate * 100).toFixed(1)}%`)}</p></div>
     </div>
     <div class="table-wrap">
       <table>

@@ -31,6 +31,8 @@ class AgentContext:
     missing_materials: list[dict]
     tool_results: list[dict]
     retrieval_trace: dict = field(default_factory=dict)
+    task_plan: dict = field(default_factory=dict)
+    plan_execution: list[dict] = field(default_factory=list)
 
 
 class AgentProvider:
@@ -207,6 +209,7 @@ class LangChainStructuredAgentProvider(AgentProvider):
                 "missing": context.missing_materials,
             },
             "retrieval": context.retrieval_trace,
+            "task_plan": context.task_plan,
             "tool_results": context.tool_results,
         }
 

@@ -109,7 +109,12 @@ def scenario_business_question_is_answered_and_traced() -> None:
     assert runs.status_code == 200, runs.text
     input_snapshot = runs.json()["items"][0]["input_snapshot"]
     assert input_snapshot["task"] == "answer_question"
-    assert input_snapshot["tool_names"] == ["get_application_snapshot", "get_material_status", "get_policy_evidence", "get_approval_status"]
+    assert input_snapshot["tool_names"] == [
+        "get_application_snapshot", "get_canonical_customer_snapshot", "get_material_status",
+        "get_policy_evidence", "get_approval_status",
+    ]
+    assert input_snapshot["task_plan"]["version"] == "v1"
+    assert all(step["status"] == "completed" for step in input_snapshot["plan_execution"])
 
 
 def scenario_observability_metrics_track_agent_health() -> None:
