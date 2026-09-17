@@ -33,6 +33,8 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "prompt_versions",
         "agent_run_workflow_outcomes",
         "prompt_observation_reviews",
+        "prompt_remediation_cases",
+        "prompt_remediation_case_events",
     }
     assert expected.issubset(table_names())
 
@@ -67,6 +69,14 @@ def test_prompt_observation_reviews_are_four_eyes_reviewable() -> None:
     assert {
         "task", "version", "prompt_content_hash", "recommendation", "snapshot_hash", "status", "reviewed_by",
     }.issubset(columns)
+
+
+def test_prompt_remediation_cases_have_a_status_history() -> None:
+    with database.connection() as connection:
+        case_columns = {row["name"] for row in connection.execute("PRAGMA table_info(prompt_remediation_cases)")}
+        event_columns = {row["name"] for row in connection.execute("PRAGMA table_info(prompt_remediation_case_events)")}
+    assert {"observation_review_id", "owner_id", "due_date", "resolution_type"}.issubset(case_columns)
+    assert {"case_id", "from_status", "to_status", "actor_id"}.issubset(event_columns)
 
 
 def test_policy_rule_lifecycle_columns_are_present() -> None:

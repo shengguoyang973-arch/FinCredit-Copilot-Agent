@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.database import connection as database_connection
 from app.human_feedback import feedback_metrics, feedback_verdicts_by_run
 from app.prompt_observation_store import latest_observation_review_summaries
+from app.prompt_remediation_store import latest_remediation_case_summaries, remediation_case_summary
 from app.workflow_store import list_agent_run_workflow_outcomes, list_all_agent_runs
 
 
@@ -88,6 +89,7 @@ def prompt_performance_report(limit: int | None = None) -> dict:
     window_runs = limit or settings.online_evaluation_window_runs
     completed = [run for run in list_all_agent_runs(window_runs) if run["state"] == "completed"]
     latest_reviews = latest_observation_review_summaries()
+    latest_cases = latest_remediation_case_summaries()
     run_ids = [run["id"] for run in completed]
     feedback_by_run = feedback_verdicts_by_run(run_ids)
     outcomes_by_run: dict[str, list[dict]] = {}
@@ -138,6 +140,9 @@ def prompt_performance_report(limit: int | None = None) -> dict:
         review = latest_reviews.get((task, prompt_version))
         if review:
             item["observation_review"] = review
+        remediation_case = latest_cases.get((task, prompt_version))
+        if remediation_case:
+            item["remediation_case"] = remediation_case
         items.append(item)
     items.sort(key=lambda item: (-item["run_count"], item["task"], item["prompt_id"], item["prompt_version"]))
     return {
@@ -145,6 +150,7 @@ def prompt_performance_report(limit: int | None = None) -> dict:
         "completed_run_count": len(completed),
         "minimum_workflow_outcomes": settings.prompt_outcome_min_samples,
         "cohorts": items,
+        "remediation_cases": remediation_case_summary(),
         "disclaimer": "人工工作流结果仅用于 Prompt 发布后观察，不是模型训练标签、授信结果预测或自动决策依据。",
     }
 

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "1.1.0"
+    app_version: str = "1.2.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"

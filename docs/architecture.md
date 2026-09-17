@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 1.1 adds four-eyes post-release Prompt observation reviews: privacy-preserving cohort snapshots and independent compliance acknowledgement of monitoring, investigation, or controlled-rollback recommendations, alongside Prompt governance, the governed credit data platform, deterministic task planning, LangChain/pgvector RAG, and OIDC workflow.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 1.2 adds human-owned Prompt remediation cases after acknowledged post-release observation reviews: privacy-preserving cohort snapshots can be assigned, tracked to a due date, and closed with evidence, without an automatic rollback or credit action.
 
 ## Module Layout
 
@@ -25,7 +25,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/task_planner.py`: Versioned, deterministic dependency graphs for supported Agent tasks; only approved read-only tools and mandatory human-decision boundaries can be planned.
 - `app/context_governance.py`: Creates the hard-character-bounded context copy sent to models, preserving evidence identifiers while recording truncation, freshness, conflict, and context-hash metadata.
 - `app/human_feedback.py`: Immutable structured human-review labels and append-only drift-alert action history.
-- `app/online_evaluation.py` / `app/prompt_observation_store.py`: Privacy-preserving online quality metrics, Prompt cohort observation from final human workflow outcomes, aggregate-only four-eyes observation snapshots, human-feedback aggregation, immutable baseline history, baseline-tolerance checks, and persistent drift alerts.
+- `app/online_evaluation.py` / `app/prompt_observation_store.py` / `app/prompt_remediation_store.py`: Privacy-preserving online quality metrics, Prompt cohort observation from final human workflow outcomes, aggregate-only four-eyes observation snapshots, human-owned remediation cases, human-feedback aggregation, immutable baseline history, baseline-tolerance checks, and persistent drift alerts.
 - `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
 - `app/prompt_registry.py` / `app/prompt_store.py`: Runtime Prompt baseline registry plus feedback-linked, hash-checked four-eyes draft/review/activation/rollback lifecycle; every Agent Run freezes prompt identity, version, and content before model invocation.
 - `app/evaluation.py`: Offline evaluation contract for accuracy, evidence recall, boundary violations, latency, and cost.
@@ -55,10 +55,11 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 12. One database transaction persists the report, completes the Agent Run, and moves the application to `pre_reviewed`; its input snapshot contains the plan and completion trace.
 13. Observability middleware emits request IDs and structured events. Each completed run updates online quality and human-feedback signals; once a compliance-owned baseline exists, breaches create or resolve persisted drift alerts, while compliance actions remain as append-only history.
 14. After the configured minimum final human workflow outcomes, a compliance user can freeze an aggregate Prompt cohort snapshot. A different compliance user acknowledges or rejects its monitoring/investigation/controlled-rollback recommendation; this never changes a Prompt or credit state.
-15. The approval policy engine evaluates whether the application can be submitted.
-16. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
-17. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions. It also records the report-hash-linked pre-review Run, frozen Prompt ID/version, and human workflow outcome in that transaction; returned applications must be re-reviewed before resubmission.
-18. Audit writes extend a SHA-256 chain; each data batch also extends a separate data-lineage chain that compliance users can verify.
+15. An acknowledged investigation or controlled-rollback recommendation may create one human-owned remediation case. Only its assigned owner may advance it; closure requires a resolution type and reference, and never performs the referenced action automatically.
+16. The approval policy engine evaluates whether the application can be submitted.
+17. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
+18. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions. It also records the report-hash-linked pre-review Run, frozen Prompt ID/version, and human workflow outcome in that transaction; returned applications must be re-reviewed before resubmission.
+19. Audit writes extend a SHA-256 chain; each data batch also extends a separate data-lineage chain that compliance users can verify.
 
 ## Current Guardrails
 
@@ -71,6 +72,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Prompt changes are content-hashed and linked to optional human-feedback IDs. Only a different compliance administrator can activate them; an in-flight Run keeps its original resolved Prompt.
 - Final human workflow decisions are attached only to the report-hash-locked pre-review Run and its frozen Prompt identity. Prompt cohorts are observation-only, never model-quality labels or autonomous credit-decision inputs.
 - Prompt observation snapshots contain aggregate counts/rates and version hashes only; a separate compliance user must acknowledge or reject every recommendation. Even an acknowledged rollback recommendation must create a new Prompt rollback draft and pass existing four-eyes activation.
+- Prompt remediation cases can be opened only for an acknowledged `investigate` or `rollback_recommended` review, are unique per review, and are changed only by their owner. A resolved case needs a conclusion type and reference; no case can automatically roll back a Prompt, alter rules, or decide credit.
 - External-model tool context excludes uploaded document text previews and registration identifiers.
 - Agent outputs are locally validated before being saved or shown.
 - Agent evidence IDs must be present in the retrieved RAG context.

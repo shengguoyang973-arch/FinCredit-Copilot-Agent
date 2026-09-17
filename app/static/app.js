@@ -47,6 +47,16 @@ const OBSERVATION_REVIEW_LABELS = {
   rollback_recommended: "建议发起受控回滚",
 };
 
+const REMEDIATION_CASE_LABELS = {
+  open: "待处理",
+  in_progress: "处理中",
+  resolved: "已关闭",
+  cancelled: "已取消",
+  overdue: "已逾期",
+  due_today: "今日到期",
+  on_track: "按期",
+};
+
 const getUser = () => userSelect.value;
 const headers = () => ({ "X-User-Id": getUser(), "Content-Type": "application/json" });
 
@@ -388,10 +398,14 @@ function renderMetrics(metrics) {
     const reviewStatus = review
       ? `最新复盘：${labelFrom(OBSERVATION_REVIEW_LABELS, review.status)} · ${labelFrom(OBSERVATION_REVIEW_LABELS, review.recommendation)}`
       : "尚未发起人工复盘";
+    const remediationCase = cohort.remediation_case;
+    const remediationStatus = remediationCase
+      ? `处置单：${labelFrom(REMEDIATION_CASE_LABELS, remediationCase.status)} · ${labelFrom(REMEDIATION_CASE_LABELS, remediationCase.due_state)} · 截止 ${remediationCase.due_date}`
+      : "尚无处置作业单";
     return `<li><strong>${escapeHtml(labelFrom(TASK_LABELS, cohort.task))} · ${escapeHtml(cohort.prompt_version)}</strong><br>
       Run：${escapeHtml(cohort.run_count)}；反馈覆盖：${escapeHtml(((cohort.feedback_coverage || 0) * 100).toFixed(1))}%；
       人工工作流结果：${escapeHtml(cohort.workflow_outcome_count)}（批准 ${escapeHtml(decisions.approved || 0)} / 拒绝 ${escapeHtml(decisions.rejected || 0)} / 退回 ${escapeHtml(decisions.returned || 0)}）<br>
-      <span class="empty">${escapeHtml(outcomeStatus)}；${escapeHtml(reviewStatus)}。仅供人工观察与处置。</span></li>`;
+      <span class="empty">${escapeHtml(outcomeStatus)}；${escapeHtml(reviewStatus)}；${escapeHtml(remediationStatus)}。仅供人工观察与处置。</span></li>`;
   }).join("") || "<li>暂无可归因的 Prompt 运行。</li>";
   const recent = (metrics.recent_runs || []).map(run => `
     <tr>
@@ -421,7 +435,7 @@ function renderMetrics(metrics) {
       <div><h3>规划一致性</h3><p>任务规划与实际工具执行：${escapeHtml(observed.plan_adherence_rate == null ? "待采样" : `${(observed.plan_adherence_rate * 100).toFixed(1)}%`)}</p></div>
     </div>
     <div class="observability-grid">
-      <div><h3>Prompt 发布后观察</h3><p>最小人工工作流样本：${escapeHtml(promptPerformance.minimum_workflow_outcomes ?? "-")}；达到样本后可由两名合规管理员完成观察复盘。人工决定仅记录实际审批流程，不代表模型正确率或自动授信结论。</p></div>
+      <div><h3>Prompt 发布后观察</h3><p>最小人工工作流样本：${escapeHtml(promptPerformance.minimum_workflow_outcomes ?? "-")}；处置单：待处理 ${escapeHtml(promptPerformance.remediation_cases?.open ?? 0)}、处理中 ${escapeHtml(promptPerformance.remediation_cases?.in_progress ?? 0)}、逾期 ${escapeHtml(promptPerformance.remediation_cases?.overdue ?? 0)}。人工决定仅记录实际审批流程，不代表模型正确率或自动授信结论。</p></div>
       <div><h3>Prompt 分群</h3><ul>${promptCohorts}</ul></div>
     </div>
     <div class="table-wrap">

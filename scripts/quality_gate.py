@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -285,6 +286,50 @@ def scenario_prompt_observation_review_is_four_eyes() -> None:
     assert acknowledged.json()["review"]["status"] == "acknowledged"
 
 
+def scenario_prompt_remediation_case_is_human_owned() -> None:
+    reviews = client.get(
+        "/v1/observability/prompt-performance/generate_brief/v1/reviews",
+        headers={"X-User-Id": "compliance_001"},
+    )
+    assert reviews.status_code == 200, reviews.text
+    review = next(item for item in reviews.json()["items"] if item["status"] == "acknowledged")
+    created = client.post(
+        f"/v1/observability/prompt-performance/generate_brief/v1/reviews/{review['id']}/remediation-cases",
+        headers={"X-User-Id": "compliance_001"},
+        json={"owner_id": "compliance_001", "due_date": (date.today() + timedelta(days=1)).isoformat()},
+    )
+    assert created.status_code == 201, created.text
+    case = created.json()["case"]
+    assert case["status"] == "open"
+    denied = client.post(
+        f"/v1/observability/prompt-remediation-cases/{case['id']}/status",
+        headers={"X-User-Id": "compliance_002"},
+        json={"status": "in_progress", "comment": "非负责人不应推进处置作业单。"},
+    )
+    assert denied.status_code == 403, denied.text
+    in_progress = client.post(
+        f"/v1/observability/prompt-remediation-cases/{case['id']}/status",
+        headers={"X-User-Id": "compliance_001"},
+        json={"status": "in_progress", "comment": "开始人工执行脱敏回放与处置评估。"},
+    )
+    assert in_progress.status_code == 200, in_progress.text
+    resolved = client.post(
+        f"/v1/observability/prompt-remediation-cases/{case['id']}/status",
+        headers={"X-User-Id": "compliance_001"},
+        json={
+            "status": "resolved", "comment": "已记录受控回滚草稿的人工复核参考。",
+            "resolution_type": "rollback_draft_created", "resolution_reference": "RB-v2",
+        },
+    )
+    assert resolved.status_code == 200, resolved.text
+    events = client.get(
+        f"/v1/observability/prompt-remediation-cases/{case['id']}/events",
+        headers={"X-User-Id": "compliance_002"},
+    )
+    assert events.status_code == 200, events.text
+    assert [event["to_status"] for event in events.json()["items"]] == ["open", "in_progress", "resolved"]
+
+
 def scenario_production_runtime_fails_closed() -> None:
     errors = validate_settings(Settings(deployment_environment="production", identity_provider="demo-header"))
     assert "生产环境禁止使用 demo-header 身份提供方" in errors
@@ -305,6 +350,7 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("policy_rule_four_eyes_lifecycle", scenario_policy_rule_four_eyes_lifecycle),
     ("prompt_four_eyes_lifecycle", scenario_prompt_four_eyes_lifecycle),
     ("prompt_observation_review_is_four_eyes", scenario_prompt_observation_review_is_four_eyes),
+    ("prompt_remediation_case_is_human_owned", scenario_prompt_remediation_case_is_human_owned),
     ("production_runtime_fails_closed", scenario_production_runtime_fails_closed),
     ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )

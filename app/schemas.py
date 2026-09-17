@@ -188,3 +188,27 @@ class PromptObservationReviewRequest(BaseModel):
 class PromptObservationReviewDecisionRequest(BaseModel):
     decision: Literal["acknowledged", "rejected"]
     comment: str = Field(min_length=5, max_length=1000)
+
+
+class PromptRemediationCaseRequest(BaseModel):
+    owner_id: str = Field(pattern=r"^[A-Za-z0-9._:@-]{2,128}$")
+    due_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    _due_date_is_valid = field_validator("due_date")(_validate_iso_date)
+
+
+class PromptRemediationCaseStatusRequest(BaseModel):
+    status: Literal["in_progress", "resolved", "cancelled"]
+    comment: str = Field(min_length=5, max_length=1000)
+    resolution_type: Literal[
+        "investigation_completed", "monitoring_completed", "rollback_draft_created", "no_change_justified",
+    ] | None = None
+    resolution_reference: str | None = Field(default=None, min_length=3, max_length=200)
+
+    @model_validator(mode="after")
+    def resolution_is_only_allowed_when_closing(self) -> "PromptRemediationCaseStatusRequest":
+        if self.status == "resolved" and (self.resolution_type is None or self.resolution_reference is None):
+            raise ValueError("关闭处置作业单必须提供结论类型与结论参考编号")
+        if self.status != "resolved" and (self.resolution_type is not None or self.resolution_reference is not None):
+            raise ValueError("仅关闭处置作业单时可以提供结论类型与结论参考编号")
+        return self

@@ -1,6 +1,6 @@
 # Prompt 发布治理
 
-FinCredit Copilot v1.1 将 Prompt 当作影响授信辅助意见的受控运行时配置，而不是可由环境变量或代码热改的自由文本。系统只支持 `generate_brief` 和 `answer_question` 两个任务；每个任务的 v1 内置 Prompt 在首次启动时写入 `prompt_versions` 作为可追溯活动基线。
+FinCredit Copilot v1.2 将 Prompt 当作影响授信辅助意见的受控运行时配置，而不是可由环境变量或代码热改的自由文本。系统只支持 `generate_brief` 和 `answer_question` 两个任务；每个任务的 v1 内置 Prompt 在首次启动时写入 `prompt_versions` 作为可追溯活动基线。
 
 ## 生命周期与边界
 

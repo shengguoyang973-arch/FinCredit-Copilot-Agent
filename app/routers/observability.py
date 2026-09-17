@@ -4,6 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.config import get_settings
 from app.domain import Role, User
 from app.human_feedback import drift_alert_exists, list_drift_alert_actions, record_drift_alert_action
 from app.metrics import agent_metrics
@@ -20,17 +21,36 @@ from app.prompt_observation_store import (
     get_observation_review,
     list_observation_reviews,
 )
+from app.prompt_remediation_store import (
+    get_remediation_case,
+    list_remediation_case_events,
+    list_remediation_cases,
+    remediation_case_summary,
+    create_remediation_case,
+    update_remediation_case,
+)
 from app.prompt_store import get_prompt_version
-from app.repository import audit
+from app.repository import USERS, audit
 from app.schemas import (
     DriftAlertActionRequest,
     OnlineEvaluationBaselineRequest,
     PromptObservationReviewDecisionRequest,
     PromptObservationReviewRequest,
+    PromptRemediationCaseRequest,
+    PromptRemediationCaseStatusRequest,
 )
 from app.security import require_roles
 
 router = APIRouter(prefix="/v1/observability", tags=["observability"])
+
+
+def _validate_remediation_owner(owner_id: str) -> None:
+    """Validate demo assignees locally; enterprise identity is verified by the IdP."""
+    if get_settings().identity_provider != "demo-header":
+        return
+    owner = USERS.get(owner_id)
+    if not owner or Role.COMPLIANCE_ADMIN not in owner.roles:
+        raise HTTPException(status_code=422, detail="演示身份下处置作业单负责人必须是已登记的合规管理员")
 
 
 @router.get("/agent-metrics")
@@ -135,6 +155,104 @@ def decide_prompt_observation_review(
     if body.decision == "rejected":
         message = "Prompt 发布后观察复盘已驳回。"
     return {"message": message, "review": review}
+
+
+@router.post(
+    "/prompt-performance/{task}/{version}/reviews/{review_id}/remediation-cases",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_prompt_remediation_case(
+    task: str,
+    version: str,
+    review_id: str,
+    body: PromptRemediationCaseRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    review = get_observation_review(review_id)
+    if not review or review["task"] != task or review["version"] != version:
+        raise HTTPException(status_code=404, detail="Prompt 观察复盘不属于指定版本")
+    _validate_remediation_owner(body.owner_id)
+    try:
+        item = create_remediation_case(
+            review_id=review_id, owner_id=body.owner_id, due_date=body.due_date, actor_id=user.id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {
+        "message": "Prompt 处置作业单已创建；须由负责人手工处理，不会自动回滚或变更授信决定。",
+        "case": item,
+    }
+
+
+@router.get("/prompt-remediation-cases")
+def prompt_remediation_cases(
+    case_status: Literal["open", "in_progress", "resolved", "cancelled"] | None = Query(default=None, alias="status"),
+    limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    items = list_remediation_cases(status=case_status, limit=limit)
+    summary = remediation_case_summary()
+    audit(
+        "prompt_remediation_cases_viewed",
+        user.id,
+        "agent_prompt_remediation_cases",
+        status=case_status,
+        result_count=len(items),
+    )
+    return {"summary": summary, "items": items}
+
+
+@router.get("/prompt-remediation-cases/{case_id}")
+def prompt_remediation_case(
+    case_id: str,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    item = get_remediation_case(case_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Prompt 处置作业单不存在")
+    audit("prompt_remediation_case_viewed", user.id, case_id)
+    return item
+
+
+@router.get("/prompt-remediation-cases/{case_id}/events")
+def prompt_remediation_case_events(
+    case_id: str,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    if not get_remediation_case(case_id):
+        raise HTTPException(status_code=404, detail="Prompt 处置作业单不存在")
+    items = list_remediation_case_events(case_id)
+    audit("prompt_remediation_case_events_viewed", user.id, case_id, result_count=len(items))
+    return {"case_id": case_id, "items": items}
+
+
+@router.post("/prompt-remediation-cases/{case_id}/status")
+def update_prompt_remediation_case(
+    case_id: str,
+    body: PromptRemediationCaseStatusRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    try:
+        item = update_remediation_case(
+            case_id,
+            next_status=body.status,
+            comment=body.comment,
+            actor_id=user.id,
+            resolution_type=body.resolution_type,
+            resolution_reference=body.resolution_reference,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {
+        "message": "Prompt 处置作业单状态已更新；所有后续变更仍须由人工按既有治理流程执行。",
+        "case": item,
+    }
 
 
 @router.get("/online-evaluation")

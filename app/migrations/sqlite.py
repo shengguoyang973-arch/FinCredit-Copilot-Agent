@@ -194,6 +194,24 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_prompt_observation_reviews_prompt ON prompt_observation_reviews(task, version, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_prompt_observation_reviews_status ON prompt_observation_reviews(status, created_at DESC)",
     )),
+    ("0013_prompt_remediation_cases", (
+        """CREATE TABLE IF NOT EXISTS prompt_remediation_cases (
+            id TEXT PRIMARY KEY, observation_review_id TEXT NOT NULL UNIQUE, task TEXT NOT NULL,
+            version TEXT NOT NULL, prompt_id TEXT NOT NULL, recommendation TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('open', 'in_progress', 'resolved', 'cancelled')),
+            owner_id TEXT NOT NULL, due_date TEXT NOT NULL, created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_by TEXT,
+            resolved_at TEXT, resolution_type TEXT, resolution_reference TEXT, resolution_note TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_prompt_remediation_cases_status_due ON prompt_remediation_cases(status, due_date)",
+        "CREATE INDEX IF NOT EXISTS idx_prompt_remediation_cases_prompt ON prompt_remediation_cases(task, version, created_at DESC)",
+        """CREATE TABLE IF NOT EXISTS prompt_remediation_case_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, event_type TEXT NOT NULL,
+            from_status TEXT NOT NULL, to_status TEXT NOT NULL, comment TEXT NOT NULL,
+            actor_id TEXT NOT NULL, occurred_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_prompt_remediation_case_events_case ON prompt_remediation_case_events(case_id, id)",
+    )),
 )
 
 
