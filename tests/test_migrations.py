@@ -35,6 +35,10 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "prompt_observation_reviews",
         "prompt_remediation_cases",
         "prompt_remediation_case_events",
+        "integration_outbox_events",
+        "integration_outbox_attempts",
+        "evaluation_dataset_manifests",
+        "evaluation_canaries",
     }
     assert expected.issubset(table_names())
 
@@ -77,6 +81,14 @@ def test_prompt_remediation_cases_have_a_status_history() -> None:
         event_columns = {row["name"] for row in connection.execute("PRAGMA table_info(prompt_remediation_case_events)")}
     assert {"observation_review_id", "owner_id", "due_date", "resolution_type"}.issubset(case_columns)
     assert {"case_id", "from_status", "to_status", "actor_id"}.issubset(event_columns)
+
+
+def test_integration_outbox_and_canary_tables_have_governance_fields() -> None:
+    with database.connection() as connection:
+        outbox_columns = {row["name"] for row in connection.execute("PRAGMA table_info(integration_outbox_events)")}
+        canary_columns = {row["name"] for row in connection.execute("PRAGMA table_info(evaluation_canaries)")}
+    assert {"destination", "payload_hash", "dedupe_key", "attempt_count", "status"}.issubset(outbox_columns)
+    assert {"dataset_hash", "traffic_percent", "criteria_json", "reviewed_by", "report_json"}.issubset(canary_columns)
 
 
 def test_policy_rule_lifecycle_columns_are_present() -> None:

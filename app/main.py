@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.bootstrap import initialize_application
 from app.config import get_settings
 from app.observability import RequestIdMiddleware, configure_logging
-from app.routers import applications, approval, audit, data_platform, health, knowledge, observability
+from app.routers import applications, approval, audit, data_platform, health, knowledge, observability, operations, release_canaries
 
 settings = get_settings()
 STATIC_DIRECTORY = Path(__file__).parent / "static"
@@ -26,6 +26,8 @@ app.include_router(approval.router)
 app.include_router(audit.router)
 app.include_router(observability.router)
 app.include_router(data_platform.router)
+app.include_router(operations.router)
+app.include_router(release_canaries.router)
 
 
 @app.get("/", include_in_schema=False)

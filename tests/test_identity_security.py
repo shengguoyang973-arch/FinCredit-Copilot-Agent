@@ -49,6 +49,12 @@ def test_production_configuration_rejects_demo_identity() -> None:
         identity_provider_for("demo-header", Settings(deployment_environment="production"))
 
 
+def test_production_configuration_requires_postgres_platform_and_webhook_delivery() -> None:
+    errors = validate_settings(oidc_settings(deployment_environment="production"))
+    assert "生产环境必须使用 postgres 数据中台后端" in errors
+    assert "生产环境必须启用 webhook 事件投递" in errors
+
+
 def test_operator_access_is_limited_to_creator_organization() -> None:
     application = type("Application", (), {"created_by": "sales_001"})()
     other_branch = User("risk_other", "异地风险经理", {Role.RISK_MANAGER}, "branch-beijing")

@@ -1,6 +1,6 @@
 # FinCredit Copilot Architecture
 
-FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 1.2 adds human-owned Prompt remediation cases after acknowledged post-release observation reviews: privacy-preserving cohort snapshots can be assigned, tracked to a due date, and closed with evidence, without an automatic rollback or credit action.
+FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service. Version 1.3 adds a PostgreSQL data-platform adapter with verified cutover tooling, a durable SIEM/work-item outbox, and de-identified four-eyes release canaries; none can automatically change a Prompt, rule, or credit decision.
 
 ## Module Layout
 
@@ -19,13 +19,16 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - `app/risk_rules.py`: Safe interpreters for admission, amount, threshold, and material rules; no dynamic code execution.
 - `app/embedding.py` / `app/vector_store.py`: Hash/OpenAI embedding adapters and memory/pgvector stores with persistent manifests.
 - `app/approval_policy.py`: Submission guardrail engine for missing materials, blocking rules, high-risk findings, and override reasons.
-- `app/data_platform.py`: Data-contract catalog, contract-hash lifecycle, source-authorized ingestion, deterministic data-quality checks, canonical-record history, and lineage-chain verification.
+- `app/data_platform.py` / `app/data_platform_postgres.py` / `app/data_platform_service.py`: SQLite development and PostgreSQL production adapters behind one data-contract catalog, source-authorized ingestion, deterministic data quality, canonical-record history, lineage-chain verification, and fail-closed backend selection.
+- `app/data_platform_cutover.py` / `app/migrations/postgres_data_platform.py`: Source-fingerprint-bound, empty-target-only PostgreSQL cutover tooling and idempotent platform schema migration stream.
 - `app/routers/data_platform.py`: Data-platform catalog, contract publication, ingestion, canonical-data, batch, and lineage APIs with role/organization guardrails.
 - `app/agent_provider.py`: LangChain LCEL prompt/model/structured-output pipeline with local deterministic fallback, OpenAI Responses, and DeepSeek-compatible implementations.
 - `app/task_planner.py`: Versioned, deterministic dependency graphs for supported Agent tasks; only approved read-only tools and mandatory human-decision boundaries can be planned.
 - `app/context_governance.py`: Creates the hard-character-bounded context copy sent to models, preserving evidence identifiers while recording truncation, freshness, conflict, and context-hash metadata.
 - `app/human_feedback.py`: Immutable structured human-review labels and append-only drift-alert action history.
 - `app/online_evaluation.py` / `app/prompt_observation_store.py` / `app/prompt_remediation_store.py`: Privacy-preserving online quality metrics, Prompt cohort observation from final human workflow outcomes, aggregate-only four-eyes observation snapshots, human-owned remediation cases, human-feedback aggregation, immutable baseline history, baseline-tolerance checks, and persistent drift alerts.
+- `app/integration_outbox.py`: Transactional minimal-payload event outbox, signed webhook delivery, retry/dead-letter history, and SIEM/work-item boundary checks.
+- `app/evaluation_dataset.py` / `app/canary_release_store.py`: De-identified evaluation dataset validation, dataset hashes, candidate/baseline comparisons, four-eyes canary state machine, and human-only finalization.
 - `app/rag/`: LangChain `BaseRetriever`, RAG contracts, evidence-chain service, offline evaluation, and parameter tuning.
 - `app/prompt_registry.py` / `app/prompt_store.py`: Runtime Prompt baseline registry plus feedback-linked, hash-checked four-eyes draft/review/activation/rollback lifecycle; every Agent Run freezes prompt identity, version, and content before model invocation.
 - `app/evaluation.py`: Offline evaluation contract for accuracy, evidence recall, boundary violations, latency, and cost.
@@ -43,7 +46,7 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 
 1. A user selects an application and role in the workbench.
 2. API routes authenticate the demo user with `X-User-Id` and enforce role permissions.
-3. Upstream CRM, core-credit, or risk-engine integrations can first publish a data-contract-bound batch through the data platform; only accepted batches update canonical records.
+3. Upstream CRM, core-credit, or risk-engine integrations can first publish a data-contract-bound batch through the explicitly selected SQLite/PostgreSQL data platform; only accepted batches update canonical records.
 4. The deterministic planner creates a versioned dependency graph. It selects only allowlisted read tools, mandates context-quality/deterministic-controls/RAG/structured validation, and adds approval-status lookup only to process questions.
 5. Service orchestration loads application, customer, material status, and a minimized organization-scoped canonical-customer snapshot from stores.
 6. Separately, compliance authors create immutable rule drafts; another compliance actor reviews the diff and approves, rejects, or schedules the version.
@@ -59,7 +62,9 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 16. The approval policy engine evaluates whether the application can be submitted.
 17. Submission atomically creates a uniquely identified approval task, locks the report hash, and moves the application to `pending_approval`.
 18. The final decision enforces organization scope and separation of duties, then atomically updates the task and application with compare-and-set conditions. It also records the report-hash-linked pre-review Run, frozen Prompt ID/version, and human workflow outcome in that transaction; returned applications must be re-reviewed before resubmission.
-19. Audit writes extend a SHA-256 chain; each data batch also extends a separate data-lineage chain that compliance users can verify.
+19. Drift alerts, remediation changes, and canary conclusions enqueue minimal SIEM/work-item outbox events in their business transaction; a separately scheduled dispatcher signs, retries, and records external delivery attempts.
+20. A release candidate can only run against a hash-locked de-identified dataset after independent compliance approval; passing it is a human review signal, not an automatic production activation.
+21. Audit writes extend a SHA-256 chain; each data batch also extends a separate data-lineage chain that compliance users can verify.
 
 ## Current Guardrails
 
@@ -73,6 +78,9 @@ FinCredit Copilot is organized as a small but enterprise-shaped FastAPI service.
 - Final human workflow decisions are attached only to the report-hash-locked pre-review Run and its frozen Prompt identity. Prompt cohorts are observation-only, never model-quality labels or autonomous credit-decision inputs.
 - Prompt observation snapshots contain aggregate counts/rates and version hashes only; a separate compliance user must acknowledge or reject every recommendation. Even an acknowledged rollback recommendation must create a new Prompt rollback draft and pass existing four-eyes activation.
 - Prompt remediation cases can be opened only for an acknowledged `investigate` or `rollback_recommended` review, are unique per review, and are changed only by their owner. A resolved case needs a conclusion type and reference; no case can automatically roll back a Prompt, alter rules, or decide credit.
+- Production data-platform readiness requires PostgreSQL; a source fingerprint must be confirmed before a cutover writes to an empty destination schema.
+- Outbox payload validation rejects customer, material, report, Prompt-content, and comment fields. Delivery is explicitly configured and retry/dead-letter state remains auditable.
+- Canary datasets must be de-identified and hash locked. The creator cannot approve or finalize their own canary, and `promoted` never itself routes live credit traffic.
 - External-model tool context excludes uploaded document text previews and registration identifiers.
 - Agent outputs are locally validated before being saved or shown.
 - Agent evidence IDs must be present in the retrieved RAG context.

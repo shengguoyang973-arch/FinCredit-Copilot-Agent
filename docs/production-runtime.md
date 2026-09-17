@@ -1,6 +1,6 @@
 # 生产运行：规则、数据中台、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v1.2 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈、Prompt 发布后工作流结果分群、双人复盘、人工处置作业单和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
+FinCredit Copilot v1.3 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、PostgreSQL 信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈、Prompt 发布后工作流结果分群、双人复盘、人工处置作业单、SIEM/工单出站事件和脱敏灰度评测；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -27,6 +27,14 @@ FINCREDIT_PGVECTOR_CONNECTION=postgresql+psycopg://user:password@host:5432/fincr
 FINCREDIT_PGVECTOR_COLLECTION=fincredit_policy_chunks
 FINCREDIT_POLICY_TIMEZONE=Asia/Shanghai
 FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS=500
+FINCREDIT_DATA_PLATFORM_BACKEND=postgres
+FINCREDIT_DATA_PLATFORM_POSTGRES_DSN=postgresql://user:password@host:5432/fincredit?sslmode=require
+FINCREDIT_DATA_PLATFORM_POSTGRES_SCHEMA=fincredit_data
+FINCREDIT_INTEGRATION_DELIVERY_MODE=webhook
+FINCREDIT_SIEM_WEBHOOK_URL=https://siem.example.com/events
+FINCREDIT_WORK_ITEM_WEBHOOK_URL=https://work.example.com/fincredit
+FINCREDIT_INTEGRATION_HMAC_SECRET=<inject-from-secret-manager>
+FINCREDIT_EVALUATION_DATASET_PATH=/app/demo_data/deidentified_agent_evaluation.json
 FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS=50
 FINCREDIT_DRIFT_MIN_SAMPLES=10
 FINCREDIT_DRIFT_MAX_FALLBACK_RATE=0.2
@@ -69,6 +77,8 @@ FINCREDIT_PROMPT_VERSION=v1
 - 治理面：每个接入结果都写入质量回执、全局审计链和独立数据血缘哈希链。`GET /v1/data-platform/lineage/integrity` 可验证血缘链。
 
 演示接口用于验证契约与治理流程，不应作为生产源系统的大载荷导入通道。生产部署应使用服务账号（OIDC 映射到受控接入角色）、API Gateway、限流、幂等键和请求签名，采用 Kafka/CDC/ETL 编排器传输数据；将不可变原始层置于受管对象存储，将规范层/服务层置于受管 PostgreSQL 或湖仓。契约 API 继续作为 schema registry 的控制面，并与企业元数据目录、血缘、DQ 告警、主数据、保留与删除策略集成。
+
+`FINCREDIT_DATA_PLATFORM_BACKEND=postgres` 会选择 PostgreSQL 适配器；生产环境拒绝 SQLite 回退。切换前使用 `scripts/migrate_data_platform_postgres.py` 生成 source fingerprint，再显式确认复制到空目标；详见 [PostgreSQL 数据中台切换](postgres-data-platform-cutover.md)。
 
 最小的接入请求示例：
 
@@ -119,8 +129,12 @@ FINCREDIT_PROMPT_VERSION=v1
 | `POST /v1/knowledge/prompts/{task}/versions/{version}/submit` | 提交 Prompt 给独立合规管理员复核 |
 | `POST /v1/knowledge/prompts/{task}/versions/{version}/decision` | 独立审批或驳回；批准时原子激活 |
 | `POST /v1/knowledge/prompts/{task}/rollback` | 从已批准版本创建回滚草稿，仍须四眼复核 |
+| `GET /v1/operations/integration-outbox` | 查询 SIEM/工单出站事件的最小化载荷和状态 |
+| `GET /v1/operations/integration-outbox/{event_id}/attempts` | 查询投递重试、响应摘要或 dead letter 证据 |
+| `POST /v1/operations/integration-outbox/dispatch` | 人工/演练触发受限批量投递；正常生产由调度器执行 |
+| `POST /v1/release-canaries` 及其状态接口 | 创建、四眼复核、执行和最终确认脱敏灰度发布 |
 
-本地 SQLite 告警适合演示和回归。生产中应将指标/告警导出到 Prometheus、OpenTelemetry、SIEM 或企业告警平台，并结合值班、SLO、事件响应和人工复核。不能因为数据量不足、没有基线或评估 API 正常响应，就将模型声明为“无漂移”。
+本地 SQLite 出站箱适合演示和回归；生产中由调度器将最小化事件 HMAC 投递到 SIEM/工单，失败重试后进入 dead letter。不能因为数据量不足、没有基线或评估 API 正常响应，就将模型声明为“无漂移”。详见 [SIEM 与工单集成](operations-integrations.md) 和 [脱敏评测与灰度发布](deidentified-evaluation-canary.md)。
 
 ## Embedding 与向量索引
 

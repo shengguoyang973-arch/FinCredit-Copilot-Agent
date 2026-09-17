@@ -3,8 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.config import get_settings, validate_settings
-from app.data_platform import healthcheck as data_platform_healthcheck
+from app.data_platform_service import healthcheck as data_platform_healthcheck
 from app.database import connection
+from app.integration_outbox import healthcheck as integration_outbox_healthcheck
 from app.vector_store import vector_store_healthcheck
 
 router = APIRouter(tags=["health"])
@@ -32,6 +33,11 @@ def ready() -> dict:
     except Exception as error:
         data_platform = {"status": "unavailable"}
         errors.append(f"data_platform_unavailable:{type(error).__name__}")
+    try:
+        integrations = integration_outbox_healthcheck()
+    except Exception as error:
+        integrations = {"status": "unavailable"}
+        errors.append(f"integrations_unavailable:{type(error).__name__}")
     if errors:
         raise HTTPException(status_code=503, detail={"status": "not_ready", "errors": errors})
     return {
@@ -39,4 +45,5 @@ def ready() -> dict:
         "embedding_provider": settings.embedding_provider, "vector_store": settings.vector_store_backend,
         "identity_provider": settings.identity_provider,
         "data_platform": data_platform,
+        "integrations": integrations,
     }

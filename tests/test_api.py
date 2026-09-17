@@ -32,13 +32,15 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "1.2.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "1.3.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
     response = client.get("/ready")
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
+    assert response.json()["data_platform"]["backend"] == "sqlite"
+    assert response.json()["integrations"]["delivery_mode"] == "disabled"
 
 
 def test_request_id_is_returned_and_audited() -> None:

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from app.config import get_settings
 from app.database import connection as database_connection
+from app.integration_outbox import enqueue_in_transaction
 from app.state_store import audit_in_transaction
 
 
@@ -67,6 +68,14 @@ def create_remediation_case(
         _append_event(
             connection, case_id=case_id, event_type="case_created", from_status="", to_status="open",
             comment="基于已确认的 Prompt 观察复盘创建处置作业单。", actor_id=actor_id, occurred_at=now,
+        )
+        enqueue_in_transaction(
+            connection, destination="work_item", event_type="prompt.remediation_case.created", severity="medium",
+            payload={
+                "case_id": case_id, "review_id": review_id, "task": review["task"], "version": review["version"],
+                "recommendation": review["recommendation"], "owner_id": owner_id, "due_date": due_date, "status": "open",
+            },
+            dedupe_key=f"prompt.remediation_case.created:{case_id}",
         )
         audit_in_transaction(
             connection,
@@ -129,6 +138,11 @@ def update_remediation_case(
         _append_event(
             connection, case_id=case_id, event_type=f"status_{next_status}", from_status=row["status"],
             to_status=next_status, comment=comment.strip(), actor_id=actor_id, occurred_at=now,
+        )
+        enqueue_in_transaction(
+            connection, destination="work_item", event_type="prompt.remediation_case.status_changed", severity="medium",
+            payload={"case_id": case_id, "task": row["task"], "version": row["version"], "from_status": row["status"], "to_status": next_status},
+            dedupe_key=f"prompt.remediation_case.status_changed:{case_id}:{next_status}",
         )
         audit_in_transaction(
             connection,

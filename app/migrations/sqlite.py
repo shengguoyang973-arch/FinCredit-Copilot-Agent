@@ -212,6 +212,40 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         )""",
         "CREATE INDEX IF NOT EXISTS idx_prompt_remediation_case_events_case ON prompt_remediation_case_events(case_id, id)",
     )),
+    ("0014_integration_outbox", (
+        """CREATE TABLE IF NOT EXISTS integration_outbox_events (
+            id TEXT PRIMARY KEY, destination TEXT NOT NULL CHECK(destination IN ('siem', 'work_item')),
+            event_type TEXT NOT NULL, severity TEXT NOT NULL, payload_json TEXT NOT NULL,
+            payload_hash TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'retryable', 'delivered', 'dead_letter', 'blocked')),
+            attempt_count INTEGER NOT NULL DEFAULT 0, available_at TEXT NOT NULL, created_at TEXT NOT NULL,
+            delivered_at TEXT, last_error TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_integration_outbox_dispatch ON integration_outbox_events(status, available_at, created_at)",
+        """CREATE TABLE IF NOT EXISTS integration_outbox_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, attempt_number INTEGER NOT NULL,
+            attempted_at TEXT NOT NULL, outcome TEXT NOT NULL, response_status INTEGER,
+            response_hash TEXT, error_message TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_integration_outbox_attempts_event ON integration_outbox_attempts(event_id, id)",
+    )),
+    ("0015_evaluation_canaries", (
+        """CREATE TABLE IF NOT EXISTS evaluation_dataset_manifests (
+            dataset_id TEXT PRIMARY KEY, dataset_hash TEXT NOT NULL UNIQUE, classification TEXT NOT NULL,
+            case_count INTEGER NOT NULL, source_label TEXT NOT NULL, registered_by TEXT NOT NULL,
+            registered_at TEXT NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS evaluation_canaries (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, candidate_provider TEXT NOT NULL,
+            baseline_provider TEXT NOT NULL, dataset_id TEXT NOT NULL, dataset_hash TEXT NOT NULL,
+            traffic_percent INTEGER NOT NULL, criteria_json TEXT NOT NULL, status TEXT NOT NULL
+                CHECK(status IN ('draft', 'pending_review', 'approved', 'rejected', 'running', 'passed', 'failed', 'promoted', 'rolled_back')),
+            created_by TEXT NOT NULL, created_at TEXT NOT NULL, submitted_by TEXT, submitted_at TEXT,
+            reviewed_by TEXT, reviewed_at TEXT, review_comment TEXT, executed_by TEXT, executed_at TEXT,
+            report_json TEXT, finalized_by TEXT, finalized_at TEXT, final_comment TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_evaluation_canaries_status ON evaluation_canaries(status, created_at DESC)",
+    )),
 )
 
 

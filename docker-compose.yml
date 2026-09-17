@@ -22,8 +22,12 @@ services:
       FINCREDIT_VECTOR_STORE_BACKEND: pgvector
       FINCREDIT_PGVECTOR_CONNECTION: postgresql+psycopg://fincredit:fincredit-local-only@pgvector:5432/fincredit
       FINCREDIT_PGVECTOR_COLLECTION: fincredit_policy_chunks
+      FINCREDIT_DATA_PLATFORM_BACKEND: postgres
+      FINCREDIT_DATA_PLATFORM_POSTGRES_DSN: postgresql://fincredit:fincredit-local-only@pgvector:5432/fincredit
+      FINCREDIT_DATA_PLATFORM_POSTGRES_SCHEMA: fincredit_data
       FINCREDIT_EMBEDDING_PROVIDER: hash-local
       FINCREDIT_EMBEDDING_DIMENSIONS: 256
+      FINCREDIT_INTEGRATION_DELIVERY_MODE: disabled
     depends_on:
       pgvector:
         condition: service_healthy

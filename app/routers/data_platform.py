@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.config import get_settings
-from app.data_platform import (
+from app.data_platform_service import (
     get_ingestion_batch,
     ingest_records,
     list_canonical_records,

@@ -2,6 +2,8 @@
 
 本目录保存 FinCredit 授信协同智能体的演示材料，全部为虚构数据，仅用于本地功能演示、测试和产品讲解。
 
+`deidentified_agent_evaluation.json` 是版本化脱敏 Agent 评测集：仅使用 `EVAL-*` 伪标识和“脱敏企业-*”别名，用于离线质量门禁与灰度候选/基线比较。新增案例必须先通过 `python scripts\validate_evaluation_dataset.py`；不得写入真实客户、材料、审批报告、Prompt 正文或直接标识信息。
+
 ## 推荐演示路径
 
 1. 打开工作台 `http://127.0.0.1:8000/`。

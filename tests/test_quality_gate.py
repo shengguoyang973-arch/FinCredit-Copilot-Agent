@@ -9,4 +9,4 @@ def test_quality_gate_script_passes() -> None:
     result = json.loads(completed.stdout)
     assert result["suite"] == "fincredit-agent-quality-gate"
     assert result["failed"] == 0
-    assert result["passed"] == 15
+    assert result["passed"] == 17

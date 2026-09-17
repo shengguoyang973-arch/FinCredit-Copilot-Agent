@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "1.2.0"
+    app_version: str = "1.3.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -24,6 +25,9 @@ class Settings:
     agent_circuit_cooldown_seconds: float = 30.0
     max_document_bytes: int = 2_000_000
     data_platform_max_batch_records: int = 500
+    data_platform_backend: str = "sqlite"
+    data_platform_postgres_dsn: str = ""
+    data_platform_postgres_schema: str = "fincredit_data"
     online_evaluation_window_runs: int = 50
     drift_min_samples: int = 10
     prompt_outcome_min_samples: int = 10
@@ -54,6 +58,17 @@ class Settings:
     oidc_name_claim: str = "name"
     oidc_role_mappings: tuple[tuple[str, str], ...] = ()
     oidc_leeway_seconds: int = 30
+    integration_delivery_mode: str = "disabled"
+    siem_webhook_url: str = ""
+    work_item_webhook_url: str = ""
+    integration_hmac_secret: str = ""
+    integration_timeout_seconds: float = 5.0
+    integration_max_attempts: int = 5
+    evaluation_dataset_path: Path = Path(__file__).resolve().parent.parent / "demo_data" / "deidentified_agent_evaluation.json"
+    canary_min_accuracy: float = 0.9
+    canary_min_evidence_recall: float = 0.9
+    canary_max_boundary_violation_rate: float = 0.0
+    canary_max_traffic_percent: int = 20
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
 
     @property
@@ -79,6 +94,9 @@ def get_settings() -> Settings:
         data_platform_max_batch_records=int(os.getenv(
             "FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS", str(Settings.data_platform_max_batch_records)
         )),
+        data_platform_backend=os.getenv("FINCREDIT_DATA_PLATFORM_BACKEND", Settings.data_platform_backend).strip().lower(),
+        data_platform_postgres_dsn=os.getenv("FINCREDIT_DATA_PLATFORM_POSTGRES_DSN", Settings.data_platform_postgres_dsn).strip(),
+        data_platform_postgres_schema=os.getenv("FINCREDIT_DATA_PLATFORM_POSTGRES_SCHEMA", Settings.data_platform_postgres_schema).strip(),
         online_evaluation_window_runs=int(os.getenv(
             "FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS", str(Settings.online_evaluation_window_runs)
         )),
@@ -132,6 +150,27 @@ def get_settings() -> Settings:
             ).items()
         )),
         oidc_leeway_seconds=int(os.getenv("FINCREDIT_OIDC_LEEWAY_SECONDS", str(Settings.oidc_leeway_seconds))),
+        integration_delivery_mode=os.getenv("FINCREDIT_INTEGRATION_DELIVERY_MODE", Settings.integration_delivery_mode).strip().lower(),
+        siem_webhook_url=os.getenv("FINCREDIT_SIEM_WEBHOOK_URL", Settings.siem_webhook_url).strip(),
+        work_item_webhook_url=os.getenv("FINCREDIT_WORK_ITEM_WEBHOOK_URL", Settings.work_item_webhook_url).strip(),
+        integration_hmac_secret=os.getenv("FINCREDIT_INTEGRATION_HMAC_SECRET", Settings.integration_hmac_secret),
+        integration_timeout_seconds=float(os.getenv(
+            "FINCREDIT_INTEGRATION_TIMEOUT_SECONDS", str(Settings.integration_timeout_seconds)
+        )),
+        integration_max_attempts=int(os.getenv(
+            "FINCREDIT_INTEGRATION_MAX_ATTEMPTS", str(Settings.integration_max_attempts)
+        )),
+        evaluation_dataset_path=Path(os.getenv("FINCREDIT_EVALUATION_DATASET_PATH", str(Settings.evaluation_dataset_path))),
+        canary_min_accuracy=float(os.getenv("FINCREDIT_CANARY_MIN_ACCURACY", str(Settings.canary_min_accuracy))),
+        canary_min_evidence_recall=float(os.getenv(
+            "FINCREDIT_CANARY_MIN_EVIDENCE_RECALL", str(Settings.canary_min_evidence_recall)
+        )),
+        canary_max_boundary_violation_rate=float(os.getenv(
+            "FINCREDIT_CANARY_MAX_BOUNDARY_VIOLATION_RATE", str(Settings.canary_max_boundary_violation_rate)
+        )),
+        canary_max_traffic_percent=int(os.getenv(
+            "FINCREDIT_CANARY_MAX_TRAFFIC_PERCENT", str(Settings.canary_max_traffic_percent)
+        )),
         data_dir=data_dir,
     )
 
@@ -191,6 +230,16 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("FINCREDIT_MAX_DOCUMENT_BYTES 必须大于 0")
     if not 1 <= settings.data_platform_max_batch_records <= 10_000:
         errors.append("FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS 必须在 1 到 10000 之间")
+    if settings.data_platform_backend not in {"sqlite", "postgres"}:
+        errors.append("FINCREDIT_DATA_PLATFORM_BACKEND 必须是 sqlite 或 postgres")
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", settings.data_platform_postgres_schema):
+        errors.append("FINCREDIT_DATA_PLATFORM_POSTGRES_SCHEMA 必须是安全的 PostgreSQL schema 标识")
+    if settings.data_platform_postgres_dsn and not settings.data_platform_postgres_dsn.startswith(("postgresql://", "postgres://")):
+        errors.append("FINCREDIT_DATA_PLATFORM_POSTGRES_DSN 必须是 PostgreSQL psycopg 连接串")
+    if settings.data_platform_backend == "postgres" and not settings.data_platform_postgres_dsn:
+        errors.append("FINCREDIT_DATA_PLATFORM_POSTGRES_DSN 未配置")
+    if settings.deployment_environment == "production" and settings.data_platform_backend != "postgres":
+        errors.append("生产环境必须使用 postgres 数据中台后端")
     if not 1 <= settings.online_evaluation_window_runs <= 10_000:
         errors.append("FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS 必须在 1 到 10000 之间")
     if not 1 <= settings.drift_min_samples <= settings.online_evaluation_window_runs:
@@ -223,4 +272,33 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("DEEPSEEK_API_KEY 未配置")
     if settings.agent_provider in {"openai", "openai-responses"} and not os.getenv("OPENAI_API_KEY"):
         errors.append("OPENAI_API_KEY 未配置")
+    if settings.integration_delivery_mode not in {"disabled", "webhook"}:
+        errors.append("FINCREDIT_INTEGRATION_DELIVERY_MODE 必须是 disabled 或 webhook")
+    if settings.integration_delivery_mode == "webhook":
+        required_integrations = {
+            "FINCREDIT_SIEM_WEBHOOK_URL": settings.siem_webhook_url,
+            "FINCREDIT_WORK_ITEM_WEBHOOK_URL": settings.work_item_webhook_url,
+        }
+        errors.extend(f"{name} 未配置" for name, value in required_integrations.items() if not value)
+        if settings.deployment_environment == "production":
+            if not all(url.startswith("https://") for url in required_integrations.values()):
+                errors.append("生产 SIEM 与工单 Webhook 必须使用 HTTPS")
+            if len(settings.integration_hmac_secret) < 32:
+                errors.append("生产 Webhook 必须配置至少 32 字符的 FINCREDIT_INTEGRATION_HMAC_SECRET")
+    if settings.deployment_environment == "production" and settings.integration_delivery_mode != "webhook":
+        errors.append("生产环境必须启用 webhook 事件投递")
+    if not 0.1 <= settings.integration_timeout_seconds <= 60:
+        errors.append("FINCREDIT_INTEGRATION_TIMEOUT_SECONDS 必须在 0.1 到 60 之间")
+    if not 1 <= settings.integration_max_attempts <= 20:
+        errors.append("FINCREDIT_INTEGRATION_MAX_ATTEMPTS 必须在 1 到 20 之间")
+    if not settings.evaluation_dataset_path.is_file():
+        errors.append("FINCREDIT_EVALUATION_DATASET_PATH 不存在或不是文件")
+    if not 0 <= settings.canary_min_accuracy <= 1:
+        errors.append("FINCREDIT_CANARY_MIN_ACCURACY 必须在 0 到 1 之间")
+    if not 0 <= settings.canary_min_evidence_recall <= 1:
+        errors.append("FINCREDIT_CANARY_MIN_EVIDENCE_RECALL 必须在 0 到 1 之间")
+    if not 0 <= settings.canary_max_boundary_violation_rate <= 1:
+        errors.append("FINCREDIT_CANARY_MAX_BOUNDARY_VIOLATION_RATE 必须在 0 到 1 之间")
+    if not 1 <= settings.canary_max_traffic_percent <= 100:
+        errors.append("FINCREDIT_CANARY_MAX_TRAFFIC_PERCENT 必须在 1 到 100 之间")
     return errors

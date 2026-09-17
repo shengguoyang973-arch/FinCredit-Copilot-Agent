@@ -330,6 +330,31 @@ def scenario_prompt_remediation_case_is_human_owned() -> None:
     assert [event["to_status"] for event in events.json()["items"]] == ["open", "in_progress", "resolved"]
 
 
+def scenario_integration_outbox_is_durable_and_manual() -> None:
+    events = client.get("/v1/operations/integration-outbox", headers={"X-User-Id": "compliance_001"})
+    assert events.status_code == 200, events.text
+    assert any(item["destination"] == "work_item" for item in events.json()["items"])
+    dispatch = client.post("/v1/operations/integration-outbox/dispatch", headers={"X-User-Id": "compliance_001"})
+    assert dispatch.status_code == 200, dispatch.text
+    assert dispatch.json()["delivery_mode"] == "disabled"
+
+
+def scenario_deidentified_canary_requires_four_eyes() -> None:
+    created = client.post("/v1/release-canaries", headers={"X-User-Id": "compliance_001"}, json={
+        "name": "quality-deid-canary", "candidate_provider": "deterministic-local",
+        "baseline_provider": "deterministic-local", "traffic_percent": 10,
+    })
+    assert created.status_code == 201, created.text
+    canary_id = created.json()["canary"]["id"]
+    assert client.post(f"/v1/release-canaries/{canary_id}/submit", headers={"X-User-Id": "compliance_001"}).status_code == 200
+    self_review = client.post(f"/v1/release-canaries/{canary_id}/decision", headers={"X-User-Id": "compliance_001"}, json={"decision": "approved", "comment": "创建人不能复核。"})
+    assert self_review.status_code == 409, self_review.text
+    assert client.post(f"/v1/release-canaries/{canary_id}/decision", headers={"X-User-Id": "compliance_002"}, json={"decision": "approved", "comment": "独立批准脱敏评测灰度。"}).status_code == 200
+    result = client.post(f"/v1/release-canaries/{canary_id}/execute", headers={"X-User-Id": "compliance_001"})
+    assert result.status_code == 200, result.text
+    assert result.json()["canary"]["status"] == "passed"
+
+
 def scenario_production_runtime_fails_closed() -> None:
     errors = validate_settings(Settings(deployment_environment="production", identity_provider="demo-header"))
     assert "生产环境禁止使用 demo-header 身份提供方" in errors
@@ -351,6 +376,8 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("prompt_four_eyes_lifecycle", scenario_prompt_four_eyes_lifecycle),
     ("prompt_observation_review_is_four_eyes", scenario_prompt_observation_review_is_four_eyes),
     ("prompt_remediation_case_is_human_owned", scenario_prompt_remediation_case_is_human_owned),
+    ("integration_outbox_is_durable_and_manual", scenario_integration_outbox_is_durable_and_manual),
+    ("deidentified_canary_requires_four_eyes", scenario_deidentified_canary_requires_four_eyes),
     ("production_runtime_fails_closed", scenario_production_runtime_fails_closed),
     ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.data_platform import get_canonical_record
+from app.data_platform_service import get_canonical_record
 from app.document_store import material_check
 from app.knowledge_store import get_policies
 from app.repository import USERS, get_customer

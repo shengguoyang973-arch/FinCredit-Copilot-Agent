@@ -2,7 +2,7 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v1.2 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，将已独立确认的 Prompt 观察复盘建议转为有人负责、可到期跟踪、可记录结论证据的人工处置作业单；系统只提供预审建议和报告草稿，绝不自动作出授信决定、自动回滚 Prompt 或自动改变规则。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v1.3 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，加入 PostgreSQL 数据中台适配与可验证切换、SIEM/工单持久化出站箱，以及脱敏评测集驱动的四眼灰度控制面；系统只提供预审建议和报告草稿，绝不自动作出授信决定、自动回滚 Prompt 或自动改变规则。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -25,6 +25,8 @@ Prompt 观察快照、双人复盘、排查与受控回滚建议边界见 [docs/
 数据中台的数据契约、接入、质量、数据服务和血缘接口见 [docs/data-platform.md](docs/data-platform.md)。
 
 任务规划、最小化上下文和线上评估/漂移告警见 [docs/agent-operations.md](docs/agent-operations.md)。
+
+PostgreSQL 数据中台切换、SIEM/工单集成与脱敏灰度发布分别见 [docs/postgres-data-platform-cutover.md](docs/postgres-data-platform-cutover.md)、[docs/operations-integrations.md](docs/operations-integrations.md)、[docs/deidentified-evaluation-canary.md](docs/deidentified-evaluation-canary.md)。
 
 API 已按领域拆分到 `app/routers/`，`main.py` 只负责应用装配、静态工作台和路由注册。
 
@@ -57,6 +59,9 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 - Prompt 发布后观察：最终人工审批与其哈希锁定预审报告中的 Agent Run 和 Prompt 版本原子关联；合规管理员可按版本查看运行量、反馈修订率和人工工作流结果，但指标不生成自动授信结论
 - Prompt 发布后双人复盘：合规管理员只能在最小人工工作流样本达到后固化无客户数据的指标快照；另一名合规管理员确认或驳回复盘建议，建议回滚仍须单独创建并复核回滚草稿
 - Prompt 人工处置作业单：已确认的“建议排查 / 建议受控回滚”可创建唯一作业单，记录负责人、到期日、状态流转与结论参考；关闭作业单不会自动回滚或改变授信结论
+- PostgreSQL 数据中台：SQLite/PG 显式后端选择、受控 PostgreSQL schema 迁移、切换指纹与空目标校验；生产环境拒绝静默使用本地中台
+- 企业集成出站箱：漂移、处置和灰度事件先持久化后投递 SIEM/工单，支持 HMAC、重试、dead letter 与尝试审计
+- 脱敏评测与灰度：版本化脱敏评测集、数据集哈希、候选/基线比较、四眼复核和人工最终推进/回退
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -113,6 +118,8 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 - `FINCREDIT_INPUT_COST_PER_1K_USD` / `FINCREDIT_OUTPUT_COST_PER_1K_USD`：Token 成本估算单价；不配置时只统计 Token，不虚构成本。
 - `FINCREDIT_MAX_DOCUMENT_BYTES`：单个材料上传字节上限，默认 `2000000`。
 - `FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS`：一次受控接入批次可提交的最多记录数，默认 `500`，范围 `1` 到 `10000`。
+- `FINCREDIT_DATA_PLATFORM_BACKEND`：`sqlite` 或 `postgres`；生产必须是 `postgres`。
+- `FINCREDIT_DATA_PLATFORM_POSTGRES_DSN` / `FINCREDIT_DATA_PLATFORM_POSTGRES_SCHEMA`：数据中台 PostgreSQL 连接与 schema；不复用 SQLAlchemy 风格的 pgvector DSN。
 - `FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS`：线上评估读取的最近完成 Agent Run 数，默认 `50`。
 - `FINCREDIT_DRIFT_MIN_SAMPLES`：建立基线和判断漂移所需的最小样本数，默认 `10`。
 - `FINCREDIT_PROMPT_OUTCOME_MIN_SAMPLES`：Prompt 分群进入“仅观察”状态所需的最小最终人工工作流结果数，默认 `10`；不用于自动发布或授信判断。
@@ -132,8 +139,12 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 - `FINCREDIT_PGVECTOR_CONNECTION`：SQLAlchemy/psycopg 连接串，例如 `postgresql+psycopg://user:password@host/db`。
 - `FINCREDIT_PGVECTOR_COLLECTION`：政策向量集合名，默认 `fincredit_policy_chunks`。
 - `FINCREDIT_POLICY_TIMEZONE`：计划生效使用的 IANA 业务时区，默认 `Asia/Shanghai`。
+- `FINCREDIT_INTEGRATION_DELIVERY_MODE`：`disabled` 或 `webhook`；生产必须启用 webhook。
+- `FINCREDIT_SIEM_WEBHOOK_URL` / `FINCREDIT_WORK_ITEM_WEBHOOK_URL` / `FINCREDIT_INTEGRATION_HMAC_SECRET`：企业事件投递目标与 HMAC 密钥；生产要求 HTTPS 和至少 32 字符密钥。
+- `FINCREDIT_EVALUATION_DATASET_PATH`：脱敏 Agent 评测集路径，默认 `demo_data/deidentified_agent_evaluation.json`。
+- `FINCREDIT_CANARY_MIN_ACCURACY` / `FINCREDIT_CANARY_MIN_EVIDENCE_RECALL` / `FINCREDIT_CANARY_MAX_BOUNDARY_VIOLATION_RATE` / `FINCREDIT_CANARY_MAX_TRAFFIC_PERCENT`：灰度评测和最大放量阈值。
 
-`FINCREDIT_ENVIRONMENT=production` 时，就绪检查要求同时配置 `oidc + openai embedding + pgvector`。完整模板、Token 声明和索引命令见 [生产运行文档](docs/production-runtime.md)。
+`FINCREDIT_ENVIRONMENT=production` 时，就绪检查要求同时配置 `oidc + openai embedding + pgvector + postgres 数据中台 + HTTPS SIEM/工单 webhook`。完整模板、切换步骤和索引命令见 [生产运行文档](docs/production-runtime.md)。
 
 ## LangChain 与 RAG 数据流
 
@@ -162,7 +173,7 @@ CRM / 核心信贷 / 风险引擎（受控服务身份）
   -> 组织隔离数据 API -> 授信审批、风险分析、Agent 最小化只读工具
 ```
 
-数据中台不以“把所有数据复制到一个数据库”为目标。每次接入必须绑定一份生效数据契约和授权来源；成功记录按 `组织 + 实体类型 + 业务键` 维护当前规范视图，同时保留历史版本。当前实现提供 SQLite 本地适配器以便演示和回归测试；生产应迁移到受管 PostgreSQL、对象存储和企业调度/CDC 平台，详见 [数据中台说明](docs/data-platform.md)。
+数据中台不以“把所有数据复制到一个数据库”为目标。每次接入必须绑定一份生效数据契约和授权来源；成功记录按 `组织 + 实体类型 + 业务键` 维护当前规范视图，同时保留历史版本。当前实现提供 SQLite 本地适配器以及 PostgreSQL 生产适配器；受控切换命令需要源指纹确认、拒绝非空目标并回写切换凭证，详见 [数据中台说明](docs/data-platform.md) 与 [PostgreSQL 切换手册](docs/postgres-data-platform-cutover.md)。
 
 任务执行先由确定性任务规划器生成“读取申请、读取中台规范画像、核验材料、检索政策、上下文质量检查、结构化输出、人工边界”的依赖图；仅流程类问答才额外读取审批状态。规划不能引入未登记工具，也不执行授信决定。模型调用前会对证据文本执行硬字符预算，保留所有证据 ID，并记录中台数据的时效与跨源冲突字段。每次 Run 在上下文构建时固定一个已批准 Prompt 的内容、ID 和版本，之后的模型调用、输出与审计快照均复用该版本。每次运行完成后系统会计算线上质量信号；样本达到阈值后，由合规管理员固化基线，后续超出基线容差或硬阈值时产生漂移告警。预审报告进入最终人工审批时，系统还会在同一事务中将审批任务、报告哈希、预审 Run 与 Prompt 版本关联；复核人员可对完成 Run 提交一次结构化反馈，合规人员可将反馈和这些发布后观察信号作为 Prompt 变更依据，并对告警写入不可变处置记录。
 
@@ -206,7 +217,7 @@ python scripts\tune_rag.py
 python -m pytest -q
 ```
 
-`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 15 个场景覆盖高风险规则命中、规则/Prompt 四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答与上下文预算追踪、人工反馈指标、Agent 指标聚合、Agent 输出治理边界、审批职责分离、最终人工审批到 Prompt 分群结果的原子关联、Prompt 发布后双人复盘、人工处置作业单的负责人/状态/结论证据边界，以及审计链校验。
+`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 17 个场景覆盖高风险规则命中、规则/Prompt 四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答与上下文预算追踪、人工反馈指标、Agent 指标聚合、Agent 输出治理边界、审批职责分离、最终人工审批到 Prompt 分群结果的原子关联、Prompt 发布后双人复盘、人工处置作业单、持久化出站箱与人工投递边界、脱敏灰度发布四眼复核，以及审计链校验。
 
 `release_gate.py` 在质量门禁之上增加 Prompt/Provider 与 RAG 评测门槛，检查准确率、证据引用率、人工审批边界、RAG Hit Rate、Recall 和 MRR；`GET /ready` 用于容器就绪探针。
 
@@ -242,7 +253,7 @@ Agent 当前白名单工具包括：`get_application_snapshot`、`get_canonical_
 
 ## 重要边界
 
-本项目使用完全模拟、脱敏的数据。当前 SQLite 的审计和数据血缘哈希链能够发现修改，但不等同于外部 WORM/不可变存储；数据质量仅覆盖契约完整性、类型和批内业务键，并不替代企业级 DQ、主数据、反洗钱或征信核验。OIDC/JWKS 与 pgvector 已提供正式适配，但生产接入前仍须把本地业务仓储和数据中台适配器迁到受控数据服务，并完成密钥管理、DLP、不可篡改日志平台和企业 IdP 联调。
+本项目使用完全模拟、脱敏的数据。当前 SQLite 的审计和数据血缘哈希链能够发现修改，但不等同于外部 WORM/不可变存储；数据质量仅覆盖契约完整性、类型和批内业务键，并不替代企业级 DQ、主数据、反洗钱或征信核验。OIDC/JWKS、pgvector 与 PostgreSQL 数据中台已提供正式适配，但生产接入前仍须将其与受控源数据服务联调，并逐步迁移其余本地业务仓储，完成密钥管理、DLP、不可篡改日志平台和企业 IdP 联调。
 
 ## 生产上线清单
 

@@ -212,3 +212,20 @@ class PromptRemediationCaseStatusRequest(BaseModel):
         if self.status != "resolved" and (self.resolution_type is not None or self.resolution_reference is not None):
             raise ValueError("仅关闭处置作业单时可以提供结论类型与结论参考编号")
         return self
+
+
+class CanaryCreateRequest(BaseModel):
+    name: str = Field(pattern=r"^[a-z][a-z0-9_-]{2,63}$")
+    candidate_provider: str = Field(pattern=r"^[a-z][a-z0-9_-]{2,63}$")
+    baseline_provider: str = Field(pattern=r"^[a-z][a-z0-9_-]{2,63}$")
+    traffic_percent: int = Field(ge=1, le=100)
+
+
+class CanaryDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    comment: str = Field(min_length=5, max_length=1000)
+
+
+class CanaryFinalizationRequest(BaseModel):
+    action: Literal["promoted", "rolled_back"]
+    comment: str = Field(min_length=5, max_length=1000)

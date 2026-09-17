@@ -15,6 +15,7 @@ from uuid import uuid4
 from app.config import get_settings
 from app.database import connection as database_connection
 from app.human_feedback import feedback_metrics, feedback_verdicts_by_run
+from app.integration_outbox import enqueue_in_transaction
 from app.prompt_observation_store import latest_observation_review_summaries
 from app.prompt_remediation_store import latest_remediation_case_summaries, remediation_case_summary
 from app.workflow_store import list_agent_run_workflow_outcomes, list_all_agent_runs
@@ -304,18 +305,29 @@ def _sync_alerts(signals: list[dict], baseline: dict | None) -> list[dict]:
                     (signal["severity"], baseline["id"], payload, signal["message"], now, existing["id"]),
                 )
             else:
+                alert_id = f"ADA-{uuid4().hex[:16].upper()}"
                 connection.execute(
                     """INSERT INTO agent_drift_alerts(
                         id, signal, severity, status, baseline_id, observed_json, message,
                         first_detected_at, last_detected_at, resolved_at
                     ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, NULL)""",
-                    (f"ADA-{uuid4().hex[:16].upper()}", signal["signal"], signal["severity"], baseline["id"],
+                    (alert_id, signal["signal"], signal["severity"], baseline["id"],
                      payload, signal["message"], now, now),
+                )
+                enqueue_in_transaction(
+                    connection, destination="siem", event_type="agent.drift_alert.opened", severity=signal["severity"],
+                    payload={"alert_id": alert_id, "signal": signal["signal"], "status": "open", "baseline_id": baseline["id"]},
+                    dedupe_key=f"agent.drift_alert.opened:{alert_id}",
                 )
         for signal, row in by_signal.items():
             if signal not in active_signals:
                 connection.execute(
                     "UPDATE agent_drift_alerts SET status = 'resolved', resolved_at = ? WHERE id = ?", (now, row["id"])
+                )
+                enqueue_in_transaction(
+                    connection, destination="siem", event_type="agent.drift_alert.resolved", severity=row["severity"],
+                    payload={"alert_id": row["id"], "signal": signal, "status": "resolved", "baseline_id": row["baseline_id"]},
+                    dedupe_key=f"agent.drift_alert.resolved:{row['id']}",
                 )
     return list_drift_alerts(status="open")
 

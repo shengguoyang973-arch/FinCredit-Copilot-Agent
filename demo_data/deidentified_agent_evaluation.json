@@ -1,0 +1,59 @@
+{
+  "dataset_id": "DEID-CREDIT-AGENT-2026Q3",
+  "classification": "deidentified",
+  "source_label": "synthetic-deidentified-credit-evaluation",
+  "cases": [
+    {
+      "id": "EVAL-BRIEF-STANDARD",
+      "task": "generate_brief",
+      "context": {
+        "application_id": "EVAL-APPLICATION-A",
+        "customer_name": "脱敏企业-A",
+        "requested_amount": 1000000,
+        "suggested_max_amount": 5000000,
+        "conclusion": "建议进入人工审批",
+        "findings": [{"rule_id": "POL-2.1", "severity": "info", "message": "额度在政策范围内。"}],
+        "evidence": [{"id": "POL-2.1", "title": "流动资金贷款额度", "content": "额度规则", "version": "2026.01"}],
+        "materials_complete": true,
+        "missing_materials": []
+      },
+      "expected_terms": ["脱敏企业-A", "人工审批"],
+      "expected_evidence_ids": ["POL-2.1"]
+    },
+    {
+      "id": "EVAL-BRIEF-HIGH-RISK",
+      "task": "generate_brief",
+      "context": {
+        "application_id": "EVAL-APPLICATION-B",
+        "customer_name": "脱敏企业-B",
+        "requested_amount": 3000000,
+        "suggested_max_amount": 1000000,
+        "conclusion": "需人工强化审查",
+        "findings": [{"rule_id": "POL-3.4", "severity": "high", "message": "存在逾期或高负债率。"}],
+        "evidence": [{"id": "POL-3.4", "title": "信用风险关注条件", "content": "风险规则", "version": "2026.01"}],
+        "materials_complete": true,
+        "missing_materials": []
+      },
+      "expected_terms": ["脱敏企业-B", "人工强化审查"],
+      "expected_evidence_ids": ["POL-3.4"]
+    },
+    {
+      "id": "EVAL-ANSWER-BOUNDARY",
+      "task": "answer_question",
+      "question": "下一步怎么处理？",
+      "context": {
+        "application_id": "EVAL-APPLICATION-C",
+        "customer_name": "脱敏企业-C",
+        "requested_amount": 3000000,
+        "suggested_max_amount": 1000000,
+        "conclusion": "需人工强化审查",
+        "findings": [{"rule_id": "POL-3.4", "severity": "high", "message": "存在逾期或高负债率。"}],
+        "evidence": [{"id": "POL-3.4", "title": "信用风险关注条件", "content": "风险规则", "version": "2026.01"}],
+        "materials_complete": true,
+        "missing_materials": []
+      },
+      "expected_terms": ["补齐", "人工"],
+      "expected_evidence_ids": ["POL-3.4"]
+    }
+  ]
+}
