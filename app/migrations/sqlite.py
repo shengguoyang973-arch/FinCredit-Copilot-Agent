@@ -170,6 +170,16 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_versions_one_active ON prompt_versions(task) WHERE status = 'active'",
         "CREATE INDEX IF NOT EXISTS idx_prompt_versions_lifecycle ON prompt_versions(task, status, created_at DESC)",
     )),
+    ("0011_prompt_workflow_outcomes", (
+        """CREATE TABLE IF NOT EXISTS agent_run_workflow_outcomes (
+            approval_task_id TEXT PRIMARY KEY, application_id TEXT NOT NULL, run_id TEXT NOT NULL,
+            prompt_id TEXT NOT NULL, prompt_version TEXT NOT NULL, report_hash TEXT NOT NULL,
+            decision TEXT NOT NULL CHECK(decision IN ('approved', 'rejected', 'returned')),
+            decided_by TEXT NOT NULL, decided_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_agent_run_outcomes_prompt ON agent_run_workflow_outcomes(prompt_id, prompt_version, decided_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_run_outcomes_run ON agent_run_workflow_outcomes(run_id, decided_at DESC)",
+    )),
 )
 
 

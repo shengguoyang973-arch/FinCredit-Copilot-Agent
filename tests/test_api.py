@@ -32,7 +32,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "0.9.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "1.0.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -65,6 +65,7 @@ def test_workbench_escapes_dynamic_frontend_content() -> None:
     assert "withButtonBusy" in script
     assert "loadingMarkup" in script
     assert "/v1/observability/agent-metrics" in script
+    assert "Prompt 发布后观察" in script
     assert "renderMetrics" in script
     assert "feedbackForm" in script
     assert "contextGovernanceMarkup" in script
@@ -318,6 +319,34 @@ def test_approver_can_make_human_decision_after_submission() -> None:
     assert decision.json()["application_status"] == "approved"
 
 
+def test_prompt_performance_links_only_final_human_workflow_results() -> None:
+    from app import database
+
+    headers = {"X-User-Id": "rm_001"}
+    upload_required_materials()
+    report = client.post("/v1/applications/APP001/pre-review", headers=headers)
+    assert report.status_code == 200
+    brief = report.json()["agent_brief"]
+    task_id = client.post("/v1/applications/APP001/submit", headers=headers).json()["approval_task"]["id"]
+    decision = client.post(
+        f"/v1/approval-tasks/{task_id}/decision", headers={"X-User-Id": "approver_001"},
+        json={"decision": "approved", "comment": "独立人工复核后完成审批。"},
+    )
+    assert decision.status_code == 200
+    performance = client.get("/v1/observability/prompt-performance", headers={"X-User-Id": "compliance_001"})
+    assert performance.status_code == 200
+    cohort = next(item for item in performance.json()["cohorts"] if item["prompt_id"] == brief["prompt_id"])
+    assert cohort["prompt_version"] == brief["prompt_version"]
+    assert cohort["workflow_outcome_count"] == 1
+    assert cohort["human_decision_counts"] == {"approved": 1, "rejected": 0, "returned": 0}
+    with database.connection() as connection:
+        outcome = connection.execute(
+            "SELECT run_id, report_hash FROM agent_run_workflow_outcomes WHERE approval_task_id = ?", (task_id,)
+        ).fetchone()
+    assert outcome["run_id"] == brief["run_id"]
+    assert outcome["report_hash"]
+
+
 def test_approval_separation_of_duties_is_enforced(monkeypatch) -> None:
     from app.domain import Role, User
     from app.repository import USERS
@@ -341,6 +370,10 @@ def test_approval_separation_of_duties_is_enforced(monkeypatch) -> None:
     )
     assert decision.status_code == 409
     assert "职责分离" in decision.json()["detail"]
+    from app import database
+    with database.connection() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM agent_run_workflow_outcomes").fetchone()[0]
+    assert count == 0
 
 
 def test_return_and_resubmit_preserve_approval_history() -> None:

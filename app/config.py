@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "FinCredit Copilot"
-    app_version: str = "0.9.0"
+    app_version: str = "1.0.0"
     service_name: str = "fincredit-copilot"
     deployment_environment: str = "development"
     identity_provider: str = "demo-header"
@@ -26,6 +26,7 @@ class Settings:
     data_platform_max_batch_records: int = 500
     online_evaluation_window_runs: int = 50
     drift_min_samples: int = 10
+    prompt_outcome_min_samples: int = 10
     drift_max_fallback_rate: float = 0.2
     drift_max_p95_latency_ms: float = 5_000.0
     drift_min_evidence_coverage: float = 0.9
@@ -82,6 +83,9 @@ def get_settings() -> Settings:
             "FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS", str(Settings.online_evaluation_window_runs)
         )),
         drift_min_samples=int(os.getenv("FINCREDIT_DRIFT_MIN_SAMPLES", str(Settings.drift_min_samples))),
+        prompt_outcome_min_samples=int(os.getenv(
+            "FINCREDIT_PROMPT_OUTCOME_MIN_SAMPLES", str(Settings.prompt_outcome_min_samples)
+        )),
         drift_max_fallback_rate=float(os.getenv(
             "FINCREDIT_DRIFT_MAX_FALLBACK_RATE", str(Settings.drift_max_fallback_rate)
         )),
@@ -191,6 +195,8 @@ def validate_settings(settings: Settings | None = None) -> list[str]:
         errors.append("FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS 必须在 1 到 10000 之间")
     if not 1 <= settings.drift_min_samples <= settings.online_evaluation_window_runs:
         errors.append("FINCREDIT_DRIFT_MIN_SAMPLES 必须在 1 到在线评估窗口大小之间")
+    if not 1 <= settings.prompt_outcome_min_samples <= settings.online_evaluation_window_runs:
+        errors.append("FINCREDIT_PROMPT_OUTCOME_MIN_SAMPLES 必须在 1 到在线评估窗口大小之间")
     if not 0 <= settings.drift_max_fallback_rate <= 1:
         errors.append("FINCREDIT_DRIFT_MAX_FALLBACK_RATE 必须在 0 到 1 之间")
     if settings.drift_max_p95_latency_ms <= 0:

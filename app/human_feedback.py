@@ -73,6 +73,21 @@ def feedback_metrics(run_ids: list[str]) -> dict:
     }
 
 
+def feedback_verdicts_by_run(run_ids: list[str]) -> dict[str, list[str]]:
+    """Return verdict labels only, for privacy-preserving Prompt cohorts."""
+    if not run_ids:
+        return {}
+    placeholders = ",".join("?" for _ in run_ids)
+    with _connection() as connection:
+        rows = connection.execute(
+            f"SELECT run_id, verdict FROM agent_feedback WHERE run_id IN ({placeholders})", run_ids
+        ).fetchall()
+    verdicts: dict[str, list[str]] = {}
+    for row in rows:
+        verdicts.setdefault(row["run_id"], []).append(row["verdict"])
+    return verdicts
+
+
 def record_drift_alert_action(*, alert_id: str, action: str, comment: str, actor_id: str) -> dict:
     now = _now()
     with _connection() as connection:

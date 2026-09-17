@@ -14,8 +14,8 @@ from uuid import uuid4
 
 from app.config import get_settings
 from app.database import connection as database_connection
-from app.human_feedback import feedback_metrics
-from app.workflow_store import list_all_agent_runs
+from app.human_feedback import feedback_metrics, feedback_verdicts_by_run
+from app.workflow_store import list_agent_run_workflow_outcomes, list_all_agent_runs
 
 
 def _connection() -> sqlite3.Connection:
@@ -74,6 +74,73 @@ def online_run_metrics(limit: int | None = None) -> dict:
         "plan_adherence_rate": _mean(plan_adherence) if plan_adherence else None,
         "plan_sample_count": len(plan_adherence),
     } | feedback_metrics([run["id"] for run in completed])
+
+
+def prompt_performance_report(limit: int | None = None) -> dict:
+    """Group observable human signals by the frozen Prompt used by each Run.
+
+    A human approval outcome reflects a business-workflow decision, not an
+    automated correctness label. The report intentionally never marks a Prompt
+    as healthy, better, or safe to use for autonomous credit decisions.
+    """
+    settings = get_settings()
+    window_runs = limit or settings.online_evaluation_window_runs
+    completed = [run for run in list_all_agent_runs(window_runs) if run["state"] == "completed"]
+    run_ids = [run["id"] for run in completed]
+    feedback_by_run = feedback_verdicts_by_run(run_ids)
+    outcomes_by_run: dict[str, list[dict]] = {}
+    for outcome in list_agent_run_workflow_outcomes(run_ids):
+        outcomes_by_run.setdefault(outcome["run_id"], []).append(outcome)
+
+    cohorts: dict[tuple[str, str, str], list[dict]] = {}
+    for run in completed:
+        snapshot = run["input_snapshot"]
+        task = str(snapshot.get("task") or run["task"] or "unknown")
+        prompt_id = str(snapshot.get("prompt_id") or "untracked")
+        prompt_version = str(snapshot.get("prompt_version") or "untracked")
+        cohorts.setdefault((task, prompt_id, prompt_version), []).append(run)
+
+    items: list[dict] = []
+    for (task, prompt_id, prompt_version), cohort_runs in cohorts.items():
+        cohort_run_ids = {run["id"] for run in cohort_runs}
+        verdicts = [
+            verdict
+            for run_id in cohort_run_ids
+            for verdict in feedback_by_run.get(run_id, [])
+        ]
+        reviewed_runs = sum(bool(feedback_by_run.get(run_id)) for run_id in cohort_run_ids)
+        outcomes = [
+            outcome
+            for run_id in cohort_run_ids
+            for outcome in outcomes_by_run.get(run_id, [])
+        ]
+        decisions = {decision: sum(outcome["decision"] == decision for outcome in outcomes)
+                     for decision in ("approved", "rejected", "returned")}
+        outcome_count = len(outcomes)
+        items.append({
+            "task": task,
+            "prompt_id": prompt_id,
+            "prompt_version": prompt_version,
+            "run_count": len(cohort_runs),
+            "feedback_count": len(verdicts),
+            "feedback_coverage": _rate(reviewed_runs, len(cohort_runs)),
+            "human_acceptance_rate": _rate(sum(verdict == "accepted" for verdict in verdicts), len(verdicts)) if verdicts else None,
+            "human_correction_rate": _rate(
+                sum(verdict in {"needs_revision", "incorrect"} for verdict in verdicts), len(verdicts)
+            ) if verdicts else None,
+            "workflow_outcome_count": outcome_count,
+            "workflow_outcome_coverage": _rate(outcome_count, len(cohort_runs)),
+            "human_decision_counts": decisions,
+            "assessment": "observed_only" if outcome_count >= settings.prompt_outcome_min_samples else "insufficient_workflow_outcomes",
+        })
+    items.sort(key=lambda item: (-item["run_count"], item["task"], item["prompt_id"], item["prompt_version"]))
+    return {
+        "window_runs": window_runs,
+        "completed_run_count": len(completed),
+        "minimum_workflow_outcomes": settings.prompt_outcome_min_samples,
+        "cohorts": items,
+        "disclaimer": "人工工作流结果仅用于 Prompt 发布后观察，不是模型训练标签、授信结果预测或自动决策依据。",
+    }
 
 
 def _rate(numerator: int, denominator: int) -> float:

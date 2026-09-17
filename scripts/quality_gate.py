@@ -174,6 +174,15 @@ def scenario_approval_separation_of_duties() -> None:
         )
         assert decision.status_code == 409, decision.text
         assert "职责分离" in decision.json()["detail"]
+        final_decision = client.post(
+            f"/v1/approval-tasks/{task_id}/decision",
+            headers={"X-User-Id": "approver_001"},
+            json={"decision": "approved", "comment": "独立人工复核后完成最终审批。"},
+        )
+        assert final_decision.status_code == 200, final_decision.text
+        performance = client.get("/v1/observability/prompt-performance", headers={"X-User-Id": "compliance_001"})
+        assert performance.status_code == 200, performance.text
+        assert any(item["workflow_outcome_count"] >= 1 for item in performance.json()["cohorts"])
     finally:
         USERS.pop("quality_dual_001", None)
 

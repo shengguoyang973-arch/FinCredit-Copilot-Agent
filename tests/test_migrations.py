@@ -31,6 +31,7 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "agent_feedback",
         "agent_drift_alert_actions",
         "prompt_versions",
+        "agent_run_workflow_outcomes",
     }
     assert expected.issubset(table_names())
 
@@ -49,6 +50,14 @@ def test_governed_workflow_columns_are_present() -> None:
         audit_columns = {row["name"] for row in connection.execute("PRAGMA table_info(audit_events)")}
     assert {"reviewed_by", "report_hash"}.issubset(approval_columns)
     assert {"prev_hash", "event_hash"}.issubset(audit_columns)
+
+
+def test_prompt_workflow_outcomes_are_bound_to_an_approval_task() -> None:
+    with database.connection() as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(agent_run_workflow_outcomes)")}
+    assert {
+        "approval_task_id", "run_id", "prompt_id", "prompt_version", "report_hash", "decision",
+    }.issubset(columns)
 
 
 def test_policy_rule_lifecycle_columns_are_present() -> None:

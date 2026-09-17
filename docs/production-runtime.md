@@ -1,6 +1,6 @@
 # 生产运行：规则、数据中台、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v0.9 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
+FinCredit Copilot v1.0 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈、Prompt 发布后工作流结果分群和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -33,6 +33,7 @@ FINCREDIT_DRIFT_MAX_FALLBACK_RATE=0.2
 FINCREDIT_DRIFT_MAX_P95_LATENCY_MS=5000
 FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE=0.9
 FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE=0.95
+FINCREDIT_PROMPT_OUTCOME_MIN_SAMPLES=10
 FINCREDIT_AGENT_CONTEXT_MAX_CHARS=12000
 FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS=168
 # 可选：只能校验当前活动 Prompt 是否为预期版本，不能覆盖内容
@@ -94,11 +95,12 @@ FINCREDIT_PROMPT_VERSION=v1
 
 数据中台工具根据申请创建人的组织读取当前客户规范记录，只返回行业、经营年限、营收、负债率、逾期天数和信用等级等批准字段，以及哈希/时间元数据。注册号、姓名等标识字段和任何 `restricted` 数据不会发送给外部模型。模型调用前会生成独立上下文副本，并以 `FINCREDIT_AGENT_CONTEXT_MAX_CHARS` 强制限制序列化字符数；超额证据文本会截断但不丢失证据 ID。中台记录按 `FINCREDIT_CANONICAL_DATA_MAX_AGE_HOURS` 标注时效，并输出跨源字段冲突名称，供复核人判断。该工具只提供辅助上下文，当前确定性准入规则仍以受控业务库为权威来源，避免未经业务确认的数据覆盖审批依据。
 
-每个完成的 Agent Run 会自动计算：降级率、P95 延迟、证据覆盖、规划一致性、自动决策边界词命中率，以及已提交人工复核的覆盖/采纳/修订率。合规管理员在稳定的生产观察窗口后调用 `POST /v1/observability/online-evaluation/baselines` 固化基线；调用 `POST /v1/observability/online-evaluation/assess` 可立即比对基线并创建/恢复告警。接口如下：
+每个完成的 Agent Run 会自动计算：降级率、P95 延迟、证据覆盖、规划一致性、自动决策边界词命中率，以及已提交人工复核的覆盖/采纳/修订率。预审报告进入最终人工审批后，审批事务还会关联报告哈希、预审 Run 和冻结 Prompt 版本，供合规管理员做发布后分群观察；它不是模型训练标签、贷后表现或自动审批信号。合规管理员在稳定的生产观察窗口后调用 `POST /v1/observability/online-evaluation/baselines` 固化基线；调用 `POST /v1/observability/online-evaluation/assess` 可立即比对基线并创建/恢复告警。接口如下：
 
 | API | 作用 |
 | --- | --- |
 | `GET /v1/observability/online-evaluation` | 查看当前指标、基线、阈值和待触发信号，不修改告警状态 |
+| `GET /v1/observability/prompt-performance` | 按冻结 Prompt 查看运行量、反馈与最终人工工作流结果；仅供人工复盘 |
 | `POST /v1/observability/online-evaluation/baselines` | 使用最近达标样本建立基线 |
 | `POST /v1/observability/online-evaluation/assess` | 评估并同步持久化漂移告警 |
 | `GET /v1/observability/drift-alerts` | 查询打开或已恢复的告警 |

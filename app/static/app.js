@@ -21,6 +21,7 @@ const TASK_LABELS = {
   generate_brief: "生成预审评述",
   answer_question: "实时业务问答",
   unknown: "历史运行记录",
+  untracked: "未受控历史运行",
 };
 
 const TOOL_LABELS = {
@@ -370,6 +371,15 @@ function renderMetrics(metrics) {
   const onlineStatus = {
     healthy: "健康", alert: "存在漂移告警", baseline_required: "等待建立基线", insufficient_data: "样本不足",
   }[online.status] || "未评估";
+  const promptPerformance = metrics.prompt_performance || {};
+  const promptCohorts = (promptPerformance.cohorts || []).map(cohort => {
+    const decisions = cohort.human_decision_counts || {};
+    const outcomeStatus = cohort.assessment === "observed_only" ? "已达到观察样本" : "工作流样本不足";
+    return `<li><strong>${escapeHtml(labelFrom(TASK_LABELS, cohort.task))} · ${escapeHtml(cohort.prompt_version)}</strong><br>
+      Run：${escapeHtml(cohort.run_count)}；反馈覆盖：${escapeHtml(((cohort.feedback_coverage || 0) * 100).toFixed(1))}%；
+      人工工作流结果：${escapeHtml(cohort.workflow_outcome_count)}（批准 ${escapeHtml(decisions.approved || 0)} / 拒绝 ${escapeHtml(decisions.rejected || 0)} / 退回 ${escapeHtml(decisions.returned || 0)}）<br>
+      <span class="empty">${escapeHtml(outcomeStatus)}，仅供 Prompt 发布后观察。</span></li>`;
+  }).join("") || "<li>暂无可归因的 Prompt 运行。</li>";
   const recent = (metrics.recent_runs || []).map(run => `
     <tr>
       <td>${escapeHtml(run.id)}</td>
@@ -396,6 +406,10 @@ function renderMetrics(metrics) {
     <div class="observability-grid">
       <div><h3>线上质量评估</h3><p>状态：${escapeHtml(onlineStatus)}；样本：${escapeHtml(observed.sample_count ?? 0)}；证据覆盖：${escapeHtml(((observed.evidence_coverage || 0) * 100).toFixed(1))}%；人工反馈覆盖：${escapeHtml(((observed.feedback_coverage || 0) * 100).toFixed(1))}%</p></div>
       <div><h3>规划一致性</h3><p>任务规划与实际工具执行：${escapeHtml(observed.plan_adherence_rate == null ? "待采样" : `${(observed.plan_adherence_rate * 100).toFixed(1)}%`)}</p></div>
+    </div>
+    <div class="observability-grid">
+      <div><h3>Prompt 发布后观察</h3><p>最小人工工作流样本：${escapeHtml(promptPerformance.minimum_workflow_outcomes ?? "-")}；人工决定仅记录实际审批流程，不代表模型正确率或自动授信结论。</p></div>
+      <div><h3>Prompt 分群</h3><ul>${promptCohorts}</ul></div>
     </div>
     <div class="table-wrap">
       <table>

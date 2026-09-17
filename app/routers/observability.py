@@ -12,6 +12,7 @@ from app.online_evaluation import (
     create_baseline,
     list_drift_alerts,
     online_evaluation_report,
+    prompt_performance_report,
 )
 from app.repository import audit
 from app.schemas import DriftAlertActionRequest, OnlineEvaluationBaselineRequest
@@ -22,7 +23,26 @@ router = APIRouter(prefix="/v1/observability", tags=["observability"])
 
 @router.get("/agent-metrics")
 def get_agent_metrics(limit: int = Query(default=200, ge=1, le=1000), user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN))) -> dict:
-    return agent_metrics(limit) | {"online_evaluation": online_evaluation_report()}
+    return agent_metrics(limit) | {
+        "online_evaluation": online_evaluation_report(),
+        "prompt_performance": prompt_performance_report(limit),
+    }
+
+
+@router.get("/prompt-performance")
+def get_prompt_performance(
+    limit: int = Query(default=200, ge=1, le=1000),
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    report = prompt_performance_report(limit)
+    audit(
+        "prompt_performance_viewed",
+        user.id,
+        "agent_prompt_performance",
+        completed_run_count=report["completed_run_count"],
+        cohort_count=len(report["cohorts"]),
+    )
+    return report
 
 
 @router.get("/online-evaluation")

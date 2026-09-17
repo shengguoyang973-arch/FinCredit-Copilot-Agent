@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from app.database import connection as database_connection
 from app.agent_runtime import AgentRun, AgentRunEvent, AgentRunState
 from app.domain import ApplicationStatus
+from app.state_store import audit_in_transaction
 
 
 def _connection() -> sqlite3.Connection:
@@ -273,6 +274,29 @@ def list_all_agent_runs(limit: int = 200) -> list[dict]:
     return [_to_agent_run(row) for row in rows]
 
 
+def list_agent_run_workflow_outcomes(run_ids: list[str]) -> list[dict]:
+    """Return minimal final human-workflow outcomes for the supplied Agent Runs.
+
+    The outcomes are audit metadata for Prompt release observation. They are not
+    labels for model training and never alter a credit decision.
+    """
+    if not run_ids:
+        return []
+    placeholders = ",".join("?" for _ in run_ids)
+    with _connection() as connection:
+        rows = connection.execute(
+            f"""SELECT approval_task_id, application_id, run_id, prompt_id, prompt_version,
+                       decision, decided_at
+                FROM agent_run_workflow_outcomes WHERE run_id IN ({placeholders})""",
+            run_ids,
+        ).fetchall()
+    return [{
+        "approval_task_id": row["approval_task_id"], "application_id": row["application_id"],
+        "run_id": row["run_id"], "prompt_id": row["prompt_id"], "prompt_version": row["prompt_version"],
+        "decision": row["decision"], "decided_at": row["decided_at"],
+    } for row in rows]
+
+
 def _to_agent_run(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -368,10 +392,11 @@ def decide_approval_task(task_id: str, decision: str, approver_id: str, comment:
         ).fetchone()
         if not report or _report_hash(report["report_json"]) != task["report_hash"]:
             raise ValueError("审批依据的预审报告已变化，请退回并重新提交")
+        decided_at = datetime.now(timezone.utc).isoformat()
         updated_task = connection.execute(
             """UPDATE approval_tasks SET status=?, decided_by=?, decided_at=?, decision_comment=?
                WHERE id=? AND status='pending'""",
-            (decision, approver_id, datetime.now(timezone.utc).isoformat(), comment, task_id),
+            (decision, approver_id, decided_at, comment, task_id),
         )
         if updated_task.rowcount != 1:
             raise ValueError("审批任务已被并发处理")
@@ -381,7 +406,69 @@ def decide_approval_task(task_id: str, decision: str, approver_id: str, comment:
         )
         if updated_application.rowcount != 1:
             raise ValueError("申请状态已被并发修改")
+        _record_prompt_workflow_outcome_in_transaction(
+            connection,
+            task=task,
+            report_json=report["report_json"],
+            decision=decision,
+            approver_id=approver_id,
+            decided_at=decided_at,
+        )
     return get_approval_task(task_id)  # type: ignore[return-value]
+
+
+def _record_prompt_workflow_outcome_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    task: sqlite3.Row,
+    report_json: str,
+    decision: str,
+    approver_id: str,
+    decided_at: str,
+) -> None:
+    """Link an immutable human decision to the exact pre-review Agent Run.
+
+    Historic reports without an Agent Run or Prompt snapshot remain valid
+    approval evidence, but cannot be attributed to a governed Prompt cohort.
+    """
+    try:
+        report = json.loads(report_json)
+        run_id = str(report.get("agent_brief", {}).get("run_id") or "")
+    except (AttributeError, json.JSONDecodeError):
+        return
+    if not run_id:
+        return
+    run = connection.execute(
+        "SELECT application_id, input_snapshot_json FROM agent_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    if not run or run["application_id"] != task["application_id"]:
+        return
+    try:
+        snapshot = json.loads(run["input_snapshot_json"])
+    except json.JSONDecodeError:
+        return
+    prompt_id = str(snapshot.get("prompt_id") or "untracked")
+    prompt_version = str(snapshot.get("prompt_version") or "untracked")
+    connection.execute(
+        """INSERT INTO agent_run_workflow_outcomes(
+            approval_task_id, application_id, run_id, prompt_id, prompt_version, report_hash,
+            decision, decided_by, decided_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            task["id"], task["application_id"], run_id, prompt_id, prompt_version,
+            task["report_hash"], decision, approver_id, decided_at,
+        ),
+    )
+    audit_in_transaction(
+        connection,
+        "prompt_workflow_outcome_recorded",
+        approver_id,
+        run_id,
+        approval_task_id=task["id"],
+        prompt_id=prompt_id,
+        prompt_version=prompt_version,
+        decision=decision,
+    )
 
 
 def _insert_agent_run_event(connection: sqlite3.Connection, event: AgentRunEvent) -> None:

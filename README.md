@@ -2,7 +2,7 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v0.9 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，加入反馈关联的 Prompt 四眼发布、内容哈希校验、原子激活与受控回滚；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v1.0 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，加入 Prompt 发布后的分群观察：最终人工审批会原子关联到对应预审 Agent Run 与冻结的 Prompt 版本；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -15,6 +15,8 @@ LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/la
 规则发布状态机、复核 API 和回滚流程见 [docs/policy-rule-lifecycle.md](docs/policy-rule-lifecycle.md)。
 
 Prompt 变更的反馈关联、四眼复核、运行时追踪与回滚流程见 [docs/prompt-governance.md](docs/prompt-governance.md)。
+
+Prompt 版本的运行量、人工反馈和最终审批工作流结果分群观察见 [docs/prompt-performance.md](docs/prompt-performance.md)。
 
 数据中台的数据契约、接入、质量、数据服务和血缘接口见 [docs/data-platform.md](docs/data-platform.md)。
 
@@ -48,6 +50,7 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 - 数据中台只读工具：Agent 仅按申请所属组织读取规范客户画像，限制级记录和标识字段不会进入模型上下文
 - 线上评估与人机闭环：持续测量降级率、P95 延迟、证据覆盖、规划一致性、反馈覆盖/修订率和自动决策边界；合规管理员可建立基线、查看持久化告警及处置历史
 - Prompt 发布治理：内置 Prompt 为可追溯基线；变更可关联人工反馈，必须通过内容哈希校验与独立合规复核才会原子激活，回滚也只能创建新草稿
+- Prompt 发布后观察：最终人工审批与其哈希锁定预审报告中的 Agent Run 和 Prompt 版本原子关联；合规管理员可按版本查看运行量、反馈修订率和人工工作流结果，但指标不生成自动授信结论
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -106,6 +109,7 @@ Compose 会启动应用和 `pgvector/pgvector:0.8.6-pg16`，业务数据与向�
 - `FINCREDIT_DATA_PLATFORM_MAX_BATCH_RECORDS`：一次受控接入批次可提交的最多记录数，默认 `500`，范围 `1` 到 `10000`。
 - `FINCREDIT_ONLINE_EVALUATION_WINDOW_RUNS`：线上评估读取的最近完成 Agent Run 数，默认 `50`。
 - `FINCREDIT_DRIFT_MIN_SAMPLES`：建立基线和判断漂移所需的最小样本数，默认 `10`。
+- `FINCREDIT_PROMPT_OUTCOME_MIN_SAMPLES`：Prompt 分群进入“仅观察”状态所需的最小最终人工工作流结果数，默认 `10`；不用于自动发布或授信判断。
 - `FINCREDIT_DRIFT_MAX_FALLBACK_RATE` / `FINCREDIT_DRIFT_MAX_P95_LATENCY_MS`：模型降级率与 P95 延迟上限，默认 `0.2` / `5000`。
 - `FINCREDIT_DRIFT_MIN_EVIDENCE_COVERAGE` / `FINCREDIT_DRIFT_MIN_PLAN_ADHERENCE`：最低证据覆盖率和规划一致性，默认 `0.9` / `0.95`。
 - `FINCREDIT_AGENT_CONTEXT_MAX_CHARS`：发送到外部模型的受控 JSON 上下文字符上限，默认 `12000`，范围 `2000` 到 `100000`；完整报告证据不受此截断影响。
@@ -154,7 +158,7 @@ CRM / 核心信贷 / 风险引擎（受控服务身份）
 
 数据中台不以“把所有数据复制到一个数据库”为目标。每次接入必须绑定一份生效数据契约和授权来源；成功记录按 `组织 + 实体类型 + 业务键` 维护当前规范视图，同时保留历史版本。当前实现提供 SQLite 本地适配器以便演示和回归测试；生产应迁移到受管 PostgreSQL、对象存储和企业调度/CDC 平台，详见 [数据中台说明](docs/data-platform.md)。
 
-任务执行先由确定性任务规划器生成“读取申请、读取中台规范画像、核验材料、检索政策、上下文质量检查、结构化输出、人工边界”的依赖图；仅流程类问答才额外读取审批状态。规划不能引入未登记工具，也不执行授信决定。模型调用前会对证据文本执行硬字符预算，保留所有证据 ID，并记录中台数据的时效与跨源冲突字段。每次 Run 在上下文构建时固定一个已批准 Prompt 的内容、ID 和版本，之后的模型调用、输出与审计快照均复用该版本。每次运行完成后系统会计算线上质量信号；样本达到阈值后，由合规管理员固化基线，后续超出基线容差或硬阈值时产生漂移告警。复核人员可对完成 Run 提交一次结构化反馈，合规人员可将反馈作为 Prompt 变更依据，并对告警写入不可变处置记录。
+任务执行先由确定性任务规划器生成“读取申请、读取中台规范画像、核验材料、检索政策、上下文质量检查、结构化输出、人工边界”的依赖图；仅流程类问答才额外读取审批状态。规划不能引入未登记工具，也不执行授信决定。模型调用前会对证据文本执行硬字符预算，保留所有证据 ID，并记录中台数据的时效与跨源冲突字段。每次 Run 在上下文构建时固定一个已批准 Prompt 的内容、ID 和版本，之后的模型调用、输出与审计快照均复用该版本。每次运行完成后系统会计算线上质量信号；样本达到阈值后，由合规管理员固化基线，后续超出基线容差或硬阈值时产生漂移告警。预审报告进入最终人工审批时，系统还会在同一事务中将审批任务、报告哈希、预审 Run 与 Prompt 版本关联；复核人员可对完成 Run 提交一次结构化反馈，合规人员可将反馈和这些发布后观察信号作为 Prompt 变更依据，并对告警写入不可变处置记录。
 
 真实大模型模式示例：
 
@@ -196,7 +200,7 @@ python scripts\tune_rag.py
 python -m pytest -q
 ```
 
-`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 13 个场景覆盖高风险规则命中、规则/Prompt 四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答与上下文预算追踪、人工反馈指标、Agent 指标聚合、Agent 输出治理边界、审批职责分离和审计链校验。
+`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 13 个场景覆盖高风险规则命中、规则/Prompt 四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答与上下文预算追踪、人工反馈指标、Agent 指标聚合、Agent 输出治理边界、审批职责分离、最终人工审批到 Prompt 分群结果的原子关联，以及审计链校验。
 
 `release_gate.py` 在质量门禁之上增加 Prompt/Provider 与 RAG 评测门槛，检查准确率、证据引用率、人工审批边界、RAG Hit Rate、Recall 和 MRR；`GET /ready` 用于容器就绪探针。
 
@@ -228,7 +232,7 @@ Agent 当前白名单工具包括：`get_application_snapshot`、`get_canonical_
 
 实时业务问答接口为 `POST /v1/applications/{application_id}/agent-question`，请求体示例：`{"question":"为什么这个申请不能提交？"}`。
 
-可观测性接口为 `GET /v1/observability/agent-metrics`，需要 `X-User-Id: compliance_001`。它会聚合 Agent 运行次数、降级率、平均耗时、最大耗时、Provider 分布、任务分布、工具调用次数和最近运行记录。工作台内置“Agent 运行观测”面板，切换到“周合规管理员”后可直接刷新查看；生成预审报告或发起 AI 业务问答后，指标会随 Agent Run 更新。所有 HTTP 响应都会带 `X-Request-Id`，请求日志使用 JSON 结构输出。
+可观测性接口为 `GET /v1/observability/agent-metrics` 与 `GET /v1/observability/prompt-performance`，需要 `X-User-Id: compliance_001`。前者聚合 Agent 运行次数、降级率、平均耗时、最大耗时、Provider 分布、任务分布、工具调用次数和最近运行记录；后者按冻结 Prompt 版本汇总运行量、人工反馈与最终人工审批工作流结果。工作台内置“Agent 运行观测”面板，切换到“周合规管理员”后可直接刷新查看；生成预审报告、发起 AI 业务问答或完成人工审批后，指标会随之更新。所有 HTTP 响应都会带 `X-Request-Id`，请求日志使用 JSON 结构输出。
 
 ## 重要边界
 
