@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 TEMP_DATA_DIR = Path(tempfile.mkdtemp(prefix="fincredit-quality-"))
 os.environ["FINCREDIT_DATA_DIR"] = str(TEMP_DATA_DIR)
+os.environ["FINCREDIT_PROMPT_OUTCOME_MIN_SAMPLES"] = "1"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -257,6 +258,33 @@ def scenario_prompt_four_eyes_lifecycle() -> None:
     assert answer.json()["answer"]["prompt_version"] == "v2"
 
 
+def scenario_prompt_observation_review_is_four_eyes() -> None:
+    created = client.post(
+        "/v1/observability/prompt-performance/generate_brief/v1/reviews",
+        headers={"X-User-Id": "compliance_001"},
+        json={
+            "recommendation": "investigate",
+            "rationale": "质量门禁验证人工工作流结果驱动的 Prompt 发布后复盘。",
+        },
+    )
+    assert created.status_code == 201, created.text
+    review = created.json()["review"]
+    assert review["snapshot"]["cohort"]["workflow_outcome_count"] >= 1
+    self_decision = client.post(
+        f"/v1/observability/prompt-performance/generate_brief/v1/reviews/{review['id']}/decision",
+        headers={"X-User-Id": "compliance_001"},
+        json={"decision": "acknowledged", "comment": "创建人不得确认自己的发布后复盘。"},
+    )
+    assert self_decision.status_code == 409, self_decision.text
+    acknowledged = client.post(
+        f"/v1/observability/prompt-performance/generate_brief/v1/reviews/{review['id']}/decision",
+        headers={"X-User-Id": "compliance_002"},
+        json={"decision": "acknowledged", "comment": "独立确认指标快照、排查建议与人工决策边界。"},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["review"]["status"] == "acknowledged"
+
+
 def scenario_production_runtime_fails_closed() -> None:
     errors = validate_settings(Settings(deployment_environment="production", identity_provider="demo-header"))
     assert "生产环境禁止使用 demo-header 身份提供方" in errors
@@ -276,6 +304,7 @@ SCENARIOS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("approval_separation_of_duties", scenario_approval_separation_of_duties),
     ("policy_rule_four_eyes_lifecycle", scenario_policy_rule_four_eyes_lifecycle),
     ("prompt_four_eyes_lifecycle", scenario_prompt_four_eyes_lifecycle),
+    ("prompt_observation_review_is_four_eyes", scenario_prompt_observation_review_is_four_eyes),
     ("production_runtime_fails_closed", scenario_production_runtime_fails_closed),
     ("audit_chain_is_verifiable", scenario_audit_chain_is_verifiable),
 )

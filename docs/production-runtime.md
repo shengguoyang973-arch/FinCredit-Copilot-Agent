@@ -1,6 +1,6 @@
 # 生产运行：规则、数据中台、Embedding、pgvector 与 OIDC
 
-FinCredit Copilot v1.0 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈、Prompt 发布后工作流结果分群和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
+FinCredit Copilot v1.1 提供六条可独立测试、但在生产共同受控的链路：政策规则与 Prompt 发布生命周期、信贷数据中台、受控任务规划与上下文治理、OpenAI Embedding + pgvector、企业 OIDC JWKS 验签和人工授信审批。线上评估会从持久化 Run 计算质量、人工反馈、Prompt 发布后工作流结果分群、双人复盘和漂移信号；`GET /ready` 会拒绝基础设施配置缺项，不会自动降级到演示实现。
 
 ## 生产配置模板
 
@@ -101,6 +101,8 @@ FINCREDIT_PROMPT_VERSION=v1
 | --- | --- |
 | `GET /v1/observability/online-evaluation` | 查看当前指标、基线、阈值和待触发信号，不修改告警状态 |
 | `GET /v1/observability/prompt-performance` | 按冻结 Prompt 查看运行量、反馈与最终人工工作流结果；仅供人工复盘 |
+| `GET/POST /v1/observability/prompt-performance/{task}/{version}/reviews` | 查询或创建无客户数据的 Prompt 观察复盘快照 |
+| `POST /v1/observability/prompt-performance/{task}/{version}/reviews/{review_id}/decision` | 由独立合规管理员确认或驳回复盘建议；不会自动回滚 |
 | `POST /v1/observability/online-evaluation/baselines` | 使用最近达标样本建立基线 |
 | `POST /v1/observability/online-evaluation/assess` | 评估并同步持久化漂移告警 |
 | `GET /v1/observability/drift-alerts` | 查询打开或已恢复的告警 |

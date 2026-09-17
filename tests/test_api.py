@@ -32,7 +32,7 @@ def test_workbench_is_available() -> None:
 def test_health_exposes_service_metadata() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "1.0.0"}
+    assert response.json() == {"status": "ok", "service": "fincredit-copilot", "version": "1.1.0"}
 
 
 def test_readiness_exposes_database_and_runtime_status() -> None:
@@ -66,6 +66,7 @@ def test_workbench_escapes_dynamic_frontend_content() -> None:
     assert "loadingMarkup" in script
     assert "/v1/observability/agent-metrics" in script
     assert "Prompt 发布后观察" in script
+    assert "OBSERVATION_REVIEW_LABELS" in script
     assert "renderMetrics" in script
     assert "feedbackForm" in script
     assert "contextGovernanceMarkup" in script

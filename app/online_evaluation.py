@@ -15,6 +15,7 @@ from uuid import uuid4
 from app.config import get_settings
 from app.database import connection as database_connection
 from app.human_feedback import feedback_metrics, feedback_verdicts_by_run
+from app.prompt_observation_store import latest_observation_review_summaries
 from app.workflow_store import list_agent_run_workflow_outcomes, list_all_agent_runs
 
 
@@ -86,6 +87,7 @@ def prompt_performance_report(limit: int | None = None) -> dict:
     settings = get_settings()
     window_runs = limit or settings.online_evaluation_window_runs
     completed = [run for run in list_all_agent_runs(window_runs) if run["state"] == "completed"]
+    latest_reviews = latest_observation_review_summaries()
     run_ids = [run["id"] for run in completed]
     feedback_by_run = feedback_verdicts_by_run(run_ids)
     outcomes_by_run: dict[str, list[dict]] = {}
@@ -117,7 +119,7 @@ def prompt_performance_report(limit: int | None = None) -> dict:
         decisions = {decision: sum(outcome["decision"] == decision for outcome in outcomes)
                      for decision in ("approved", "rejected", "returned")}
         outcome_count = len(outcomes)
-        items.append({
+        item = {
             "task": task,
             "prompt_id": prompt_id,
             "prompt_version": prompt_version,
@@ -132,7 +134,11 @@ def prompt_performance_report(limit: int | None = None) -> dict:
             "workflow_outcome_coverage": _rate(outcome_count, len(cohort_runs)),
             "human_decision_counts": decisions,
             "assessment": "observed_only" if outcome_count >= settings.prompt_outcome_min_samples else "insufficient_workflow_outcomes",
-        })
+        }
+        review = latest_reviews.get((task, prompt_version))
+        if review:
+            item["observation_review"] = review
+        items.append(item)
     items.sort(key=lambda item: (-item["run_count"], item["task"], item["prompt_id"], item["prompt_version"]))
     return {
         "window_runs": window_runs,

@@ -14,8 +14,20 @@ from app.online_evaluation import (
     online_evaluation_report,
     prompt_performance_report,
 )
+from app.prompt_observation_store import (
+    create_observation_review,
+    decide_observation_review,
+    get_observation_review,
+    list_observation_reviews,
+)
+from app.prompt_store import get_prompt_version
 from app.repository import audit
-from app.schemas import DriftAlertActionRequest, OnlineEvaluationBaselineRequest
+from app.schemas import (
+    DriftAlertActionRequest,
+    OnlineEvaluationBaselineRequest,
+    PromptObservationReviewDecisionRequest,
+    PromptObservationReviewRequest,
+)
 from app.security import require_roles
 
 router = APIRouter(prefix="/v1/observability", tags=["observability"])
@@ -43,6 +55,86 @@ def get_prompt_performance(
         cohort_count=len(report["cohorts"]),
     )
     return report
+
+
+@router.get("/prompt-performance/{task}/{version}/reviews")
+def prompt_observation_reviews(
+    task: str,
+    version: str,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    prompt = get_prompt_version(task, version)
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt 版本不存在")
+    items = list_observation_reviews(task=task, version=version)
+    audit("prompt_observation_reviews_viewed", user.id, task, version=version, result_count=len(items))
+    return {"task": task, "version": version, "items": items}
+
+
+@router.post("/prompt-performance/{task}/{version}/reviews", status_code=status.HTTP_201_CREATED)
+def create_prompt_observation_review(
+    task: str,
+    version: str,
+    body: PromptObservationReviewRequest,
+    limit: int = Query(default=200, ge=1, le=1000),
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    prompt = get_prompt_version(task, version)
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt 版本不存在")
+    if prompt["status"] not in {"active", "retired"}:
+        raise HTTPException(status_code=409, detail="仅已批准的活动或历史 Prompt 版本可以发起观察复盘")
+    performance = prompt_performance_report(limit)
+    cohort = next(
+        (item for item in performance["cohorts"] if item["task"] == task and item["prompt_version"] == version),
+        None,
+    )
+    if not cohort:
+        raise HTTPException(status_code=409, detail="当前观察窗口没有该 Prompt 版本的完成 Agent Run")
+    try:
+        review = create_observation_review(
+            task=task,
+            version=version,
+            cohort=cohort,
+            window_runs=performance["window_runs"],
+            minimum_workflow_outcomes=performance["minimum_workflow_outcomes"],
+            recommendation=body.recommendation,
+            rationale=body.rationale,
+            actor_id=user.id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return {
+        "message": "Prompt 发布后观察复盘已创建，须由另一名合规管理员处理；不会自动回滚或变更授信决定。",
+        "review": review,
+    }
+
+
+@router.post("/prompt-performance/{task}/{version}/reviews/{review_id}/decision")
+def decide_prompt_observation_review(
+    task: str,
+    version: str,
+    review_id: str,
+    body: PromptObservationReviewDecisionRequest,
+    user: User = Depends(require_roles(Role.COMPLIANCE_ADMIN)),
+) -> dict:
+    existing = get_observation_review(review_id)
+    if not existing or existing["task"] != task or existing["version"] != version:
+        raise HTTPException(status_code=404, detail="Prompt 观察复盘不属于指定版本")
+    try:
+        review = decide_observation_review(
+            review_id, decision=body.decision, comment=body.comment, actor_id=user.id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    message = "Prompt 发布后观察复盘已由独立合规管理员确认。"
+    if body.decision == "rejected":
+        message = "Prompt 发布后观察复盘已驳回。"
+    return {"message": message, "review": review}
 
 
 @router.get("/online-evaluation")

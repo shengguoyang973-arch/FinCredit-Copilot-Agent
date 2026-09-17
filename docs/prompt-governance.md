@@ -1,6 +1,6 @@
 # Prompt 发布治理
 
-FinCredit Copilot v1.0 将 Prompt 当作影响授信辅助意见的受控运行时配置，而不是可由环境变量或代码热改的自由文本。系统只支持 `generate_brief` 和 `answer_question` 两个任务；每个任务的 v1 内置 Prompt 在首次启动时写入 `prompt_versions` 作为可追溯活动基线。
+FinCredit Copilot v1.1 将 Prompt 当作影响授信辅助意见的受控运行时配置，而不是可由环境变量或代码热改的自由文本。系统只支持 `generate_brief` 和 `answer_question` 两个任务；每个任务的 v1 内置 Prompt 在首次启动时写入 `prompt_versions` 作为可追溯活动基线。
 
 ## 生命周期与边界
 
@@ -56,4 +56,4 @@ active / retired Prompt
 
 ## 发布后观察
 
-预审报告中的 Agent Run 会保留冻结 Prompt 的 ID 与版本。报告哈希锁定后，最终人工审批会将任务、报告哈希、Run 与 Prompt 身份在同一事务中写入结果记录；失败的职责分离或完整性校验不会产生结果。合规管理员可通过 `GET /v1/observability/prompt-performance` 查看分群运行量、人工反馈与人工工作流结果。该信息仅用于人工发布后复盘，不能解释为模型正确率、贷后表现或自动审批依据；完整边界见 [prompt-performance.md](prompt-performance.md)。
+预审报告中的 Agent Run 会保留冻结 Prompt 的 ID 与版本。报告哈希锁定后，最终人工审批会将任务、报告哈希、Run 与 Prompt 身份在同一事务中写入结果记录；失败的职责分离或完整性校验不会产生结果。合规管理员可通过 `GET /v1/observability/prompt-performance` 查看分群运行量、人工反馈与人工工作流结果，并在达到最小样本后发起由另一名合规管理员处理的观察复盘。该信息仅用于人工发布后复盘，不能解释为模型正确率、贷后表现或自动审批依据；完整边界见 [prompt-performance.md](prompt-performance.md) 和 [prompt-observation-review.md](prompt-observation-review.md)。

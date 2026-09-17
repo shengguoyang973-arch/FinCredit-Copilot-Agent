@@ -38,6 +38,15 @@ const PROVIDER_LABELS = {
   "deterministic-local": "本地稳态智能体",
 };
 
+const OBSERVATION_REVIEW_LABELS = {
+  pending_review: "待独立复核",
+  acknowledged: "已独立确认",
+  rejected: "已驳回",
+  continue_monitoring: "继续观察",
+  investigate: "建议排查",
+  rollback_recommended: "建议发起受控回滚",
+};
+
 const getUser = () => userSelect.value;
 const headers = () => ({ "X-User-Id": getUser(), "Content-Type": "application/json" });
 
@@ -375,10 +384,14 @@ function renderMetrics(metrics) {
   const promptCohorts = (promptPerformance.cohorts || []).map(cohort => {
     const decisions = cohort.human_decision_counts || {};
     const outcomeStatus = cohort.assessment === "observed_only" ? "已达到观察样本" : "工作流样本不足";
+    const review = cohort.observation_review;
+    const reviewStatus = review
+      ? `最新复盘：${labelFrom(OBSERVATION_REVIEW_LABELS, review.status)} · ${labelFrom(OBSERVATION_REVIEW_LABELS, review.recommendation)}`
+      : "尚未发起人工复盘";
     return `<li><strong>${escapeHtml(labelFrom(TASK_LABELS, cohort.task))} · ${escapeHtml(cohort.prompt_version)}</strong><br>
       Run：${escapeHtml(cohort.run_count)}；反馈覆盖：${escapeHtml(((cohort.feedback_coverage || 0) * 100).toFixed(1))}%；
       人工工作流结果：${escapeHtml(cohort.workflow_outcome_count)}（批准 ${escapeHtml(decisions.approved || 0)} / 拒绝 ${escapeHtml(decisions.rejected || 0)} / 退回 ${escapeHtml(decisions.returned || 0)}）<br>
-      <span class="empty">${escapeHtml(outcomeStatus)}，仅供 Prompt 发布后观察。</span></li>`;
+      <span class="empty">${escapeHtml(outcomeStatus)}；${escapeHtml(reviewStatus)}。仅供人工观察与处置。</span></li>`;
   }).join("") || "<li>暂无可归因的 Prompt 运行。</li>";
   const recent = (metrics.recent_runs || []).map(run => `
     <tr>
@@ -408,7 +421,7 @@ function renderMetrics(metrics) {
       <div><h3>规划一致性</h3><p>任务规划与实际工具执行：${escapeHtml(observed.plan_adherence_rate == null ? "待采样" : `${(observed.plan_adherence_rate * 100).toFixed(1)}%`)}</p></div>
     </div>
     <div class="observability-grid">
-      <div><h3>Prompt 发布后观察</h3><p>最小人工工作流样本：${escapeHtml(promptPerformance.minimum_workflow_outcomes ?? "-")}；人工决定仅记录实际审批流程，不代表模型正确率或自动授信结论。</p></div>
+      <div><h3>Prompt 发布后观察</h3><p>最小人工工作流样本：${escapeHtml(promptPerformance.minimum_workflow_outcomes ?? "-")}；达到样本后可由两名合规管理员完成观察复盘。人工决定仅记录实际审批流程，不代表模型正确率或自动授信结论。</p></div>
       <div><h3>Prompt 分群</h3><ul>${promptCohorts}</ul></div>
     </div>
     <div class="table-wrap">

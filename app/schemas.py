@@ -178,3 +178,13 @@ class PromptRollbackRequest(BaseModel):
     target_version: str = Field(pattern=r"^v[1-9][0-9]{0,20}$")
     new_version: str = Field(pattern=r"^v[1-9][0-9]{0,20}$")
     reason: str = Field(min_length=10, max_length=1000)
+
+
+class PromptObservationReviewRequest(BaseModel):
+    recommendation: Literal["continue_monitoring", "investigate", "rollback_recommended"]
+    rationale: str = Field(min_length=10, max_length=1000)
+
+
+class PromptObservationReviewDecisionRequest(BaseModel):
+    decision: Literal["acknowledged", "rejected"]
+    comment: str = Field(min_length=5, max_length=1000)

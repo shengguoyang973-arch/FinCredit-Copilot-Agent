@@ -2,7 +2,7 @@
 
 [![FinCredit CI](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shengguoyang973-arch/FinCredit-Copilot-Agent/actions/workflows/ci.yml)
 
-面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v1.0 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，加入 Prompt 发布后的分群观察：最终人工审批会原子关联到对应预审 Agent Run 与冻结的 Prompt 版本；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
+面向小微企业流动资金贷款的授信尽调与审批协同 Agent。v1.1 在 LangChain、pgvector、企业 OIDC、规则发布治理和信贷数据中台基础上，加入 Prompt 发布后的双人复盘：最终人工审批会原子关联到对应预审 Agent Run 与冻结的 Prompt 版本，达到观察样本后由独立合规管理员确认“继续观察 / 排查 / 建议受控回滚”；系统只提供预审建议和报告草稿，绝不自动作出授信决定。
 
 架构说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -17,6 +17,8 @@ LangChain/RAG 迁移、数据流、调优方式和后续扩展说明见 [docs/la
 Prompt 变更的反馈关联、四眼复核、运行时追踪与回滚流程见 [docs/prompt-governance.md](docs/prompt-governance.md)。
 
 Prompt 版本的运行量、人工反馈和最终审批工作流结果分群观察见 [docs/prompt-performance.md](docs/prompt-performance.md)。
+
+Prompt 观察快照、双人复盘、排查与受控回滚建议边界见 [docs/prompt-observation-review.md](docs/prompt-observation-review.md)。
 
 数据中台的数据契约、接入、质量、数据服务和血缘接口见 [docs/data-platform.md](docs/data-platform.md)。
 
@@ -51,6 +53,7 @@ SQLite 连接集中在 `app/database.py`，建表 SQL 集中在 `app/migrations/
 - 线上评估与人机闭环：持续测量降级率、P95 延迟、证据覆盖、规划一致性、反馈覆盖/修订率和自动决策边界；合规管理员可建立基线、查看持久化告警及处置历史
 - Prompt 发布治理：内置 Prompt 为可追溯基线；变更可关联人工反馈，必须通过内容哈希校验与独立合规复核才会原子激活，回滚也只能创建新草稿
 - Prompt 发布后观察：最终人工审批与其哈希锁定预审报告中的 Agent Run 和 Prompt 版本原子关联；合规管理员可按版本查看运行量、反馈修订率和人工工作流结果，但指标不生成自动授信结论
+- Prompt 发布后双人复盘：合规管理员只能在最小人工工作流样本达到后固化无客户数据的指标快照；另一名合规管理员确认或驳回复盘建议，建议回滚仍须单独创建并复核回滚草稿
 - 可追溯的预审报告草稿、证据链、人工审批任务和审计日志
 - 材料归档、SHA-256 完整性摘要、文本字段抽取与缺件校验
 - 可插拔 Agent Provider 层；默认本地确定性 Agent 生成尽调摘要、关键风险、建议动作与治理边界
@@ -200,7 +203,7 @@ python scripts\tune_rag.py
 python -m pytest -q
 ```
 
-`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 13 个场景覆盖高风险规则命中、规则/Prompt 四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答与上下文预算追踪、人工反馈指标、Agent 指标聚合、Agent 输出治理边界、审批职责分离、最终人工审批到 Prompt 分群结果的原子关联，以及审计链校验。
+`quality_gate.py` 使用临时数据库运行场景化回归评测，不污染本地演示数据。当前 14 个场景覆盖高风险规则命中、规则/Prompt 四眼发布与版本切换、生产配置 fail-closed、越权操作拒绝、缺材料提交拦截、高风险人工覆盖理由、业务问答与上下文预算追踪、人工反馈指标、Agent 指标聚合、Agent 输出治理边界、审批职责分离、最终人工审批到 Prompt 分群结果的原子关联、Prompt 发布后双人复盘，以及审计链校验。
 
 `release_gate.py` 在质量门禁之上增加 Prompt/Provider 与 RAG 评测门槛，检查准确率、证据引用率、人工审批边界、RAG Hit Rate、Recall 和 MRR；`GET /ready` 用于容器就绪探针。
 
@@ -232,7 +235,7 @@ Agent 当前白名单工具包括：`get_application_snapshot`、`get_canonical_
 
 实时业务问答接口为 `POST /v1/applications/{application_id}/agent-question`，请求体示例：`{"question":"为什么这个申请不能提交？"}`。
 
-可观测性接口为 `GET /v1/observability/agent-metrics` 与 `GET /v1/observability/prompt-performance`，需要 `X-User-Id: compliance_001`。前者聚合 Agent 运行次数、降级率、平均耗时、最大耗时、Provider 分布、任务分布、工具调用次数和最近运行记录；后者按冻结 Prompt 版本汇总运行量、人工反馈与最终人工审批工作流结果。工作台内置“Agent 运行观测”面板，切换到“周合规管理员”后可直接刷新查看；生成预审报告、发起 AI 业务问答或完成人工审批后，指标会随之更新。所有 HTTP 响应都会带 `X-Request-Id`，请求日志使用 JSON 结构输出。
+可观测性接口为 `GET /v1/observability/agent-metrics` 与 `GET /v1/observability/prompt-performance`，需要 `X-User-Id: compliance_001`。前者聚合 Agent 运行次数、降级率、平均耗时、最大耗时、Provider 分布、任务分布、工具调用次数和最近运行记录；后者按冻结 Prompt 版本汇总运行量、人工反馈、最终人工审批工作流结果和最近复盘状态。工作台内置“Agent 运行观测”面板，切换到“周合规管理员”后可直接刷新查看；生成预审报告、发起 AI 业务问答或完成人工审批后，指标会随之更新。所有 HTTP 响应都会带 `X-Request-Id`，请求日志使用 JSON 结构输出。
 
 ## 重要边界
 

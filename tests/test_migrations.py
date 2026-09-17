@@ -32,6 +32,7 @@ def test_sqlite_migrations_create_expected_tables() -> None:
         "agent_drift_alert_actions",
         "prompt_versions",
         "agent_run_workflow_outcomes",
+        "prompt_observation_reviews",
     }
     assert expected.issubset(table_names())
 
@@ -57,6 +58,14 @@ def test_prompt_workflow_outcomes_are_bound_to_an_approval_task() -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(agent_run_workflow_outcomes)")}
     assert {
         "approval_task_id", "run_id", "prompt_id", "prompt_version", "report_hash", "decision",
+    }.issubset(columns)
+
+
+def test_prompt_observation_reviews_are_four_eyes_reviewable() -> None:
+    with database.connection() as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(prompt_observation_reviews)")}
+    assert {
+        "task", "version", "prompt_content_hash", "recommendation", "snapshot_hash", "status", "reviewed_by",
     }.issubset(columns)
 
 

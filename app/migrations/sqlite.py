@@ -180,6 +180,20 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "CREATE INDEX IF NOT EXISTS idx_agent_run_outcomes_prompt ON agent_run_workflow_outcomes(prompt_id, prompt_version, decided_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_agent_run_outcomes_run ON agent_run_workflow_outcomes(run_id, decided_at DESC)",
     )),
+    ("0012_prompt_observation_reviews", (
+        """CREATE TABLE IF NOT EXISTS prompt_observation_reviews (
+            id TEXT PRIMARY KEY, task TEXT NOT NULL, version TEXT NOT NULL, prompt_id TEXT NOT NULL,
+            prompt_content_hash TEXT NOT NULL, recommendation TEXT NOT NULL
+                CHECK(recommendation IN ('continue_monitoring', 'investigate', 'rollback_recommended')),
+            rationale TEXT NOT NULL, snapshot_json TEXT NOT NULL, snapshot_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending_review', 'acknowledged', 'rejected')),
+            created_by TEXT NOT NULL, created_at TEXT NOT NULL, reviewed_by TEXT,
+            reviewed_at TEXT, review_comment TEXT,
+            UNIQUE(task, version, snapshot_hash)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_prompt_observation_reviews_prompt ON prompt_observation_reviews(task, version, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_prompt_observation_reviews_status ON prompt_observation_reviews(status, created_at DESC)",
+    )),
 )
 
 
